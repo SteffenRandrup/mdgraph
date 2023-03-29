@@ -253,11 +253,6 @@ fn graph_location_extremes(graph: &ForceGraph<(), ()>) -> (f32, f32, f32, f32) {
         };
     }
 
-    max_x *= 1.1;
-    max_y *= 1.1;
-    min_x *= 1.1;
-    min_y *= 1.1;
-
     return (min_x, max_x, min_y, max_y);
 
 }
@@ -290,7 +285,11 @@ impl Program<()> for GraphDisplay<'_> {
         let size = bounds.size();
         let mut frame = Frame::new(size);
 
-        let (min_x, max_x, min_y, max_y) = graph_location_extremes(&self.graph);
+        // np means no padding
+        let padding = 0.1;
+        let padding_factor = 1.0 + padding;
+        let (min_x_np, max_x_np, min_y_np, max_y_np) = graph_location_extremes(&self.graph);
+        let (min_x, max_x, min_y, max_y) = (min_x_np * padding_factor, max_x_np * padding_factor, min_y_np * padding_factor, max_y_np * padding_factor);
 
         let x_width = max_x - min_x;
         let y_width = max_y - min_y;
