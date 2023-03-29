@@ -1,0 +1,16 @@
+[package]
+name = "mdgraph"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+fdg-sim = { version = "0.9.1", features = ["json"] }
+gitignore = "1.0.7"
+grep = "0.2.11"
+grep-matcher = "0.1.6"
+grep-regex = "0.1.11"
+grep-searcher = "0.1.11"
+iced = { version = "0.8.0", features = ["canvas"] }
+walkdir = "2.3.3"
