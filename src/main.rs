@@ -51,12 +51,12 @@ fn get_files(notes_directory: &Path)  -> Result<Vec<PathBuf>, Box<dyn std::error
     // If there is, we can return whatever is included as determined by the gitignore crate
     // If not we can return a list of all files
     let gitignore_path = notes_directory.join(".gitignore");
-    if gitignore_path.exists() {
-         // TODO check that we don't get an error here e.g. if .gitignore is malformed
-         let gitignore_file = gitignore::File::new(&gitignore_path).unwrap();
-         // TODO what happens if gitignore is empty?
-         let included_files = gitignore_file.included_files().unwrap();
-         return Ok(included_files);
+    if gitignore_path.exists() && false {
+        // TODO check that we don't get an error here e.g. if .gitignore is malformed
+        let gitignore_file = gitignore::File::new(&gitignore_path).unwrap();
+        // TODO what happens if gitignore is empty?
+        let included_files = gitignore_file.included_files().unwrap();
+        return Ok(included_files);
     }
     // We don't have a gitignore, so we just list the contents
     else {
@@ -109,6 +109,7 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
     for file_to_search in files_vec {
 
         if file_to_search.is_dir() { continue; }
+
         // Read the file
         let mut f = fs::File::open(file_to_search.as_path()).unwrap();
         let mut file_content = Vec::new();
@@ -116,7 +117,9 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
 
         // Match markdown wiki-links: [[id-goes-here]]
         // Ids can contain |_- letters and numbers
-        let matcher = RegexMatcher::new(r"\[\[([\|0-9a-zA-Z_-]*)\]\]").unwrap();
+        // let matcher = RegexMatcher::new(r"\[\[([\|0-9a-zA-Z_-]*)\]\]").unwrap();
+        // Match any none-whitespace character or newline within [[..]]
+        let matcher = RegexMatcher::new(r"\[{2}([\S]*)\]{2}.*").unwrap();
 
         // Search for matches, assuming encoding is UTF-8
         let mut matches: Vec<String> = vec![];
@@ -167,7 +170,7 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
                 // For now don't push something without a mtach
                 directed_links.insert(String::from(f_stem.to_str().unwrap()), matches);
             },
-            None => {} // This should not happen. TODO deal with it!
+            None => {println!("No file stem");} // This should not happen. TODO deal with it!
         }
 
     }
@@ -177,6 +180,7 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
     // Build relation between filename and node id
     for id in directed_links.keys() {
         let node = graph.add_force_node(id.to_string(), ());
+
         node_names.insert(id.to_string(), node);
     }
 
@@ -185,23 +189,31 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
         let first_node = node_names[key];
 
         for second_node_name in value {
+
+            // Handle possible input errors
+            if !node_names.contains_key(second_node_name) {
+                println!("{} is a bad link from {}", second_node_name, key);
+                continue;
+            }
+            if second_node_name == key {
+                println!("Self reference in {}", second_node_name);
+                continue;
+            }
+
             let second_node = node_names[second_node_name];
+
             graph.add_edge(first_node, second_node, ());
         }
-
     }
 
-    // let mut removable: Vec<NodeIndex> = Vec::new();
-    // for nodei in graph.node_indices() {
-    //     if graph.neighbors_undirected(nodei).count() == 0 {
-    //         removable.push(nodei);
-    //     }
-    // }
+    for node_name in directed_links.keys() {
+        let node = node_names[node_name];
+        let n_neighbors = graph.neighbors_undirected(node).count();
 
-    // for nodei in removable {
-    //     graph.remove_node(nodei);
-    // }
-
+        if n_neighbors == 0 {
+            println!("{} has no neighbors", node_name);
+        }
+    }
 
     return graph;
 }
@@ -350,10 +362,10 @@ impl Application for GraphApp {
 
         let graph = generate_graph(&flags.notes_directory);
 
-        let simforce = handy(1.0, 0.9, true, true);
-        let params = SimulationParameters::new(10.0, fdg_sim::Dimensions::Two, simforce);
-        // let params = SimulationParameters::default();
+        let simforce = handy(200.0, 0.9, true, true);
+        let params = SimulationParameters::new(200.0, fdg_sim::Dimensions::Two, simforce);
         let mut simulation = Simulation::from_graph(graph, params);
+
         // your event/render loop
         for _frame in 0..100 {
             // update the nodes positions based on force algorithm
@@ -409,10 +421,6 @@ fn main() {
             return;
         }
     };
-    println!("{}", notes_dir);
-
-    // let notes_dir_path = Path::from(notes_dir);
-    // let app = GraphApp::new(GraphAppFlags {notes_directory: String::from(".")});
 
     match GraphApp::run(Settings::with_flags(GraphAppFlags {notes_directory: notes_dir})) {
         Err(e) => {
