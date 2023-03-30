@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
@@ -10,7 +11,7 @@ use fdg_sim::{ForceGraph, ForceGraphHelper, Simulation, SimulationParameters};
 use fdg_sim::{
     petgraph::{
         visit::{EdgeRef, IntoEdgeReferences},
-        // EdgeType, Undirected,
+        EdgeType, Undirected,
         graph::NodeIndex,
     },
     self,
@@ -18,11 +19,11 @@ use fdg_sim::{
 };
 
 use iced::widget::canvas;
-use iced::widget::canvas::{Canvas, Cursor, Frame, Geometry, Program};  // Fill, 
+use iced::widget::canvas::{Canvas, Cursor, Frame, Geometry};  // Fill, 
 // use iced::widget::canvas::stroke;
 use iced::{Color, Rectangle, Theme, Length}; //, Size
 use iced::executor;
-use iced::{Application, Command, Element, Settings, Point};
+use iced::{Application, Command, Element, Settings, Point, Subscription};
 
 use gitignore;
 use walkdir::WalkDir;
@@ -116,8 +117,6 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
         f.read_to_end(&mut file_content).unwrap();
 
         // Match markdown wiki-links: [[id-goes-here]]
-        // Ids can contain |_- letters and numbers
-        // let matcher = RegexMatcher::new(r"\[\[([\|0-9a-zA-Z_-]*)\]\]").unwrap();
         // Match any none-whitespace character or newline within [[..]]
         let matcher = RegexMatcher::new(r"\[{2}([\S]*)\]{2}.*").unwrap();
 
@@ -141,7 +140,12 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
                 // Get the correct bytes from the match
                 // And save it amongst other matches of links
                 let matched = line[capture_group].to_string();
-                let matched_format_point = matched.find("|").unwrap_or(matched.len());
+
+                // If the wiki link contains a title and / or a header identifier e.g.
+                // [[id#header|some title]], we remove everything after the special character
+                let matched_format_point_title = matched.find("|").unwrap_or(matched.len());
+                let matched_format_point_header = matched.find("#").unwrap_or(matched.len());
+                let matched_format_point = min(matched_format_point_title, matched_format_point_header);
                 let matched_name = &matched[0..matched_format_point];
 
                 matches.push(String::from(matched_name));
@@ -186,8 +190,11 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
 
     // Build edges in graph
     for (key, value) in directed_links.iter() {
+
+        // Get the first NodeIndex from its name
         let first_node = node_names[key];
 
+        // Iterate over linked nodes
         for second_node_name in value {
 
             // Handle possible input errors
@@ -195,22 +202,24 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
                 println!("{} is a bad link from {}", second_node_name, key);
                 continue;
             }
+            // The node references itself - this causes issues for graph simulation
             if second_node_name == key {
                 println!("Self reference in {}", second_node_name);
                 continue;
             }
 
+            // Fetch the linked node by name and add an edge to the graph
             let second_node = node_names[second_node_name];
-
             graph.add_edge(first_node, second_node, ());
         }
     }
 
+    // Identifiy orphans (nothing linked to or from node) and notify about it
     for node_name in directed_links.keys() {
         let node = node_names[node_name];
-        let n_neighbors = graph.neighbors_undirected(node).count();
 
-        if n_neighbors == 0 {
+        // get nodes both connected from the node and other nodes linking to it
+        if graph.neighbors_undirected(node).count() == 0 {
             println!("{} has no neighbors", node_name);
         }
     }
@@ -218,9 +227,8 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
     return graph;
 }
 
+// Calculate the maximum and minimum coordinates for the graph nodes
 fn graph_location_extremes(graph: &ForceGraph<(), ()>) -> (f32, f32, f32, f32) {
-
-    // let mut positions = HashMap::new();
 
     let mut min_x = 0.0;
     let mut max_x = 0.0;
@@ -270,6 +278,12 @@ fn graph_location_extremes(graph: &ForceGraph<(), ()>) -> (f32, f32, f32, f32) {
 }
 
 
+// Enum to send messages in iced program
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Tick,
+}
+
 
 #[derive(Debug)]
 struct GraphDisplay<'a> {
@@ -287,7 +301,8 @@ impl GraphDisplay<'_> {
     }
 }
 
-impl Program<()> for GraphDisplay<'_> {
+// Canvas needs Program impl
+impl canvas::Program<()> for GraphDisplay<'_> {
 
     type State = ();
 
@@ -297,17 +312,21 @@ impl Program<()> for GraphDisplay<'_> {
         let size = bounds.size();
         let mut frame = Frame::new(size);
 
+        // Add some padding to the extreme points - looks better
         // np means no padding
         let padding = 0.1;
         let padding_factor = 1.0 + padding;
         let (min_x_np, max_x_np, min_y_np, max_y_np) = graph_location_extremes(&self.graph);
         let (min_x, max_x, min_y, max_y) = (min_x_np * padding_factor, max_x_np * padding_factor, min_y_np * padding_factor, max_y_np * padding_factor);
 
+        // Compute the distance between extreme points and scaling factors for the window
         let x_width = max_x - min_x;
         let y_width = max_y - min_y;
         let width_factor = size.width / x_width;
         let height_factor = size.height / y_width;
 
+        // Shift the node coordinates such that the minimum is shifted to the origin
+        // Then paint the node on the canvas as a point
         for node in self.graph.node_weights() {
 
             let point = Point::new((node.location[0] - min_x) * width_factor, (node.location[1] - min_y) * height_factor);
@@ -316,15 +335,18 @@ impl Program<()> for GraphDisplay<'_> {
             frame.fill(&circle, Color::WHITE);
         }
 
+        // Draw the links between nodes (edges) as lines
         for edge in self.graph.edge_references() {
 
-
+            // Get the location of the nodes
             let source = self.graph[edge.source()].location;
             let target = self.graph[edge.target()].location;
 
+            // Translate location to points on current canvas
             let source_point = Point::new((source[0] - min_x) * width_factor, (source[1] - min_y) * height_factor);
             let target_point = Point::new((target[0] - min_x) * width_factor, (target[1] - min_y) * height_factor);
 
+            // Draw a line between the points
             let edge_path = canvas::Path::line(source_point, target_point);
             let stroke_style = canvas::stroke::Stroke::default().with_color(Color::WHITE);
             frame.stroke(&edge_path, stroke_style);
@@ -336,7 +358,8 @@ impl Program<()> for GraphDisplay<'_> {
 }
 
 struct GraphApp {
-    graph: ForceGraph<(), ()>,
+    // graph: ForceGraph<(), ()>,
+    simulation: Simulation<(), (), Undirected>,
 }
 
 // #[derive(Default)]
@@ -376,7 +399,8 @@ impl Application for GraphApp {
         let updated_graph = simulation.get_graph().clone();
 
         return (Self {
-            graph: updated_graph,
+            // graph: updated_graph,
+            simulation: simulation,
         }, Command::none())
     }
 
@@ -393,7 +417,7 @@ impl Application for GraphApp {
     }
 
     fn view(&self) -> Element<Self::Message> {
-        return Canvas::new(GraphDisplay::new(&self.graph)).width(Length::Fill).height(Length::Fill).into()
+        return Canvas::new(GraphDisplay::new(&self.simulation.get_graph())).width(Length::Fill).height(Length::Fill).into()
     }
 }
 
@@ -401,6 +425,8 @@ impl Application for GraphApp {
 fn main() {
 
 
+    // Read given arguments to find directory with nodes
+    // Default to current directory
     let args: Vec<String> = env::args().collect();
 
     let notes_dir = match args.len() {
@@ -416,12 +442,13 @@ fn main() {
         _ => { 
             println!("Invalid arguments");
             for a in &args {
-                println!("{}", a);
+                print!(" {}", a);
             }
             return;
         }
     };
 
+    // Start graphical interface
     match GraphApp::run(Settings::with_flags(GraphAppFlags {notes_directory: notes_dir})) {
         Err(e) => {
             println!("{}", e);
