@@ -6,21 +6,20 @@ use std::io::prelude::*;
 use std::fs;
 use std::str::FromStr;
 
+// use fdg_sim::force::Force;
 use fdg_sim::{ForceGraph, ForceGraphHelper, Simulation, SimulationParameters};
 
 use fdg_sim::{
     petgraph::{
         visit::{EdgeRef, IntoEdgeReferences},
-        EdgeType, Undirected,
+        Undirected,
         graph::NodeIndex,
     },
     self,
     force::handy,
 };
 
-use iced::widget::canvas;
-use iced::widget::canvas::{Canvas, Cursor, Frame, Geometry};  // Fill, 
-// use iced::widget::canvas::stroke;
+use iced::widget::canvas::{self, Canvas, Cursor, Frame, Geometry, Stroke, Event};  // Fill, 
 use iced::{Color, Rectangle, Theme, Length}; //, Size
 use iced::executor;
 use iced::{Application, Command, Element, Settings, Point, Subscription};
@@ -279,9 +278,10 @@ fn graph_location_extremes(graph: &ForceGraph<(), ()>) -> (f32, f32, f32, f32) {
 
 
 // Enum to send messages in iced program
-#[derive(Debug, Clone, Copy)]
-enum Message {
-    Tick,
+#[derive(Debug, Clone)]
+enum GMessage {
+    // GraphEvent(Event),
+    GraphEvent,
 }
 
 
@@ -296,13 +296,13 @@ impl GraphDisplay<'_> {
 
         GraphDisplay {
             graph,
-            point_radius: 2.0,
+            point_radius: 2.5,
         }
     }
 }
 
 // Canvas needs Program impl
-impl canvas::Program<()> for GraphDisplay<'_> {
+impl<Message> canvas::Program<Message> for GraphDisplay<'_> {
 
     type State = ();
 
@@ -348,7 +348,7 @@ impl canvas::Program<()> for GraphDisplay<'_> {
 
             // Draw a line between the points
             let edge_path = canvas::Path::line(source_point, target_point);
-            let stroke_style = canvas::stroke::Stroke::default().with_color(Color::WHITE);
+            let stroke_style = Stroke::default().with_color(Color::WHITE);
             frame.stroke(&edge_path, stroke_style);
 
         }
@@ -358,7 +358,6 @@ impl canvas::Program<()> for GraphDisplay<'_> {
 }
 
 struct GraphApp {
-    // graph: ForceGraph<(), ()>,
     simulation: Simulation<(), (), Undirected>,
 }
 
@@ -377,7 +376,7 @@ impl Application for GraphApp {
 
     type Executor = executor::Default;
     type Flags = GraphAppFlags;
-    type Message = ();
+    type Message = GMessage;
     type Theme = Theme;
 
     fn new(flags: GraphAppFlags) -> (Self, Command<Self::Message>) {
@@ -387,20 +386,9 @@ impl Application for GraphApp {
 
         let simforce = handy(200.0, 0.9, true, true);
         let params = SimulationParameters::new(200.0, fdg_sim::Dimensions::Two, simforce);
-        let mut simulation = Simulation::from_graph(graph, params);
-
-        // your event/render loop
-        for _frame in 0..100 {
-            // update the nodes positions based on force algorithm
-            println!("{}", _frame);
-            simulation.update(0.055);
-        }
-
-        let updated_graph = simulation.get_graph().clone();
 
         return (Self {
-            // graph: updated_graph,
-            simulation: simulation,
+            simulation: Simulation::from_graph(graph, params),
         }, Command::none())
     }
 
@@ -413,17 +401,36 @@ impl Application for GraphApp {
     }
 
     fn update(&mut self, _message: Self::Message) -> Command<Self::Message> {
+        self.simulation.update(0.055);
+
+        let mut velsum = 0.0;
+        let mut count = 0.0;
+
+        for node in self.simulation.get_graph().node_weights() {
+            velsum += (node.velocity.x.powf(2.0) + node.velocity.y.powf(2.0) + node.velocity.z.powf(2.0)).sqrt();
+            count += 1.0;
+        }
+        let mean = velsum / count;
+        println!("{}", mean);
+
         Command::none()
     }
 
     fn view(&self) -> Element<Self::Message> {
         return Canvas::new(GraphDisplay::new(&self.simulation.get_graph())).width(Length::Fill).height(Length::Fill).into()
     }
+
+    // Continuously update the graph (15ms ~ 60fps)
+    // Might not want to set a fixed time
+    fn subscription(&self) -> Subscription<GMessage> {
+        iced::time::every(std::time::Duration::from_millis(15)).map(|_| {
+            GMessage::GraphEvent
+        })
+    }
 }
 
 
 fn main() {
-
 
     // Read given arguments to find directory with nodes
     // Default to current directory
