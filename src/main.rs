@@ -278,26 +278,26 @@ fn graph_bounds(graph: &ForceGraph<(), ()>) -> Rectangle {
 }
 
 
-fn canvas_location_to_graph_location(graph_bounds: &Rectangle, point: Point, padding_factor: f32, canvas_bounds: &Rectangle ) -> Point {
+fn canvas_location_to_graph_location(graph_bounds: &Rectangle, point: Point, padding: f32, canvas_bounds: &Rectangle ) -> Point {
 
-    let width_factor = canvas_bounds.width / (graph_bounds.width * padding_factor);
-    let height_factor = canvas_bounds.height / (graph_bounds.height * padding_factor);
+    let width_factor = (canvas_bounds.width - 2.0 * padding) / graph_bounds.width;
+    let height_factor = (canvas_bounds.height - 2.0 * padding) / graph_bounds.height;
 
     return Point::new(
-        point.x / width_factor - (canvas_bounds.x - graph_bounds.x),
-        point.y / height_factor - (canvas_bounds.y - graph_bounds.y)
+        (point.x - padding) / width_factor - (canvas_bounds.x - graph_bounds.x),
+        (point.y - padding) / height_factor - (canvas_bounds.y - graph_bounds.y)
     )
 }
 
-fn graph_location_to_canvas_location(graph_bounds: &Rectangle, point: Point, padding_factor: f32, canvas_bounds: &Rectangle) -> Point {
+fn graph_location_to_canvas_location(graph_bounds: &Rectangle, point: Point, padding: f32, canvas_bounds: &Rectangle) -> Point {
 
-    let width_factor = canvas_bounds.width / (graph_bounds.width * padding_factor);
-    let height_factor = canvas_bounds.height / (graph_bounds.height * padding_factor);
+    let width_factor = (canvas_bounds.width - 2.0 * padding) / graph_bounds.width;
+    let height_factor = (canvas_bounds.height - 2.0 * padding) / graph_bounds.height;
 
     // the Rectangle location is defined from the top left corner
     return Point::new(
-        (point.x + (canvas_bounds.x - graph_bounds.x)) * width_factor,
-        (point.y + (canvas_bounds.y - graph_bounds.y)) * height_factor
+        (point.x + (canvas_bounds.x - graph_bounds.x)) * width_factor + padding,
+        (point.y + (canvas_bounds.y - graph_bounds.y)) * height_factor + padding
     )
 }
 
@@ -306,7 +306,7 @@ fn graph_location_to_canvas_location(graph_bounds: &Rectangle, point: Point, pad
 struct GraphDisplay<'a> {
     graph: &'a ForceGraph<(), ()>,
     point_radius: f32,
-    padding_factor: f32,
+    padding: f32,
 }
 
 impl GraphDisplay<'_> {
@@ -315,7 +315,7 @@ impl GraphDisplay<'_> {
         GraphDisplay {
             graph,
             point_radius: 2.5,
-            padding_factor: 1.1,
+            padding: 20.0,
         }
     }
 }
@@ -331,7 +331,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
 
     type State = CanvasState;
 
-    fn update(&self, state: &mut CanvasState, event: iced::widget::canvas::Event, bound: Rectangle, _cursor: Cursor) -> (event::Status, Option<GMessage>) {
+    fn update(&self, state: &mut CanvasState, event: iced::widget::canvas::Event, bound: Rectangle, cursor: Cursor) -> (event::Status, Option<GMessage>) {
 
         match event {
             // Button was pressed
@@ -339,7 +339,11 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                 state.left_button_pressed = true;
 
                 let bounding_rectangle = graph_bounds(&self.graph);
-                let clicked_point = canvas_location_to_graph_location(&bounding_rectangle, state.cursor_position, self.padding_factor, &bound);
+
+                // Safe to unwrap, because we just clicked the canvas and therefore have focus
+                let cursor_position = canvas::Cursor::position(&cursor).unwrap();
+
+                let clicked_point = canvas_location_to_graph_location(&bounding_rectangle, cursor_position, self.padding, &bound);
 
                let mut distance_map: HashMap<NodeIndex, f32> = HashMap::new();
 
@@ -396,7 +400,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
         let graph_bounding_rectangle = graph_bounds(&self.graph);
 
         for node in self.graph.node_weights() {
-            let canvas_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(node.location[0], node.location[1]), self.padding_factor, &bounds);
+            let canvas_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(node.location[0], node.location[1]), self.padding, &bounds);
 
             let circle = canvas::Path::circle(canvas_point, self.point_radius);
             frame.fill(&circle, Color::WHITE);
@@ -406,8 +410,8 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
             let source = self.graph[edge.source()].location;
             let target = self.graph[edge.target()].location;
 
-            let source_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(source[0], source[1]), self.padding_factor, &bounds);
-            let target_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(target[0], target[1]), self.padding_factor, &bounds);
+            let source_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(source[0], source[1]), self.padding, &bounds);
+            let target_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(target[0], target[1]), self.padding, &bounds);
 
             let edge_path = canvas::Path::line(source_point, target_point);
             let stroke_style = Stroke::default().with_color(Color::WHITE);
