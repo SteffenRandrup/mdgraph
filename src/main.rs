@@ -19,7 +19,8 @@ use fdg_sim::{
     force::handy,
 };
 
-use iced::widget::canvas::{self, Canvas, Cursor, Frame, Geometry, Stroke, Event};  // Fill, 
+use iced::widget::canvas::{self, Canvas, Cursor, Frame, Geometry, Stroke, Event};  // Fill,  , Event
+use iced::widget::canvas::event;
 use iced::{Color, Rectangle, Theme, Length}; //, Size
 use iced::executor;
 use iced::{Application, Command, Element, Settings, Point, Subscription};
@@ -277,14 +278,6 @@ fn graph_location_extremes(graph: &ForceGraph<(), ()>) -> (f32, f32, f32, f32) {
 }
 
 
-// Enum to send messages in iced program
-#[derive(Debug, Clone)]
-enum GMessage {
-    // GraphEvent(Event),
-    GraphEvent,
-}
-
-
 #[derive(Debug)]
 struct GraphDisplay<'a> {
     graph: &'a ForceGraph<(), ()>,
@@ -301,20 +294,57 @@ impl GraphDisplay<'_> {
     }
 }
 
-// Canvas needs Program impl
-impl<Message> canvas::Program<Message> for GraphDisplay<'_> {
+#[derive(Default)]
+struct CanvasState {
+    cursor_position: iced::Point,
+    left_button_pressed: bool,
+}
 
-    type State = ();
+// Canvas needs Program impl
+impl canvas::Program<GMessage> for GraphDisplay<'_> {
+
+    type State = CanvasState;
+
+    fn update(&self, state: &mut CanvasState, event: iced::widget::canvas::Event, _bound: Rectangle, _cursor: Cursor) -> (event::Status, Option<GMessage>) {
+
+        match event {
+            // Button was pressed
+            canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                state.left_button_pressed = true;
+                (event::Status::Captured, Some(GMessage::GraphClick(state.cursor_position)))
+            },
+            // In case we need to check for releasing cursor button
+            canvas::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                state.left_button_pressed = false;
+                (event::Status::Captured, None)
+            },
+
+            // Cursor was moved
+            canvas::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+
+                // Update state to reflect cursor position
+                // then acknowledge
+                state.cursor_position = position;
+                (event::Status::Captured, None)
+            },
+
+            // Ignore all other events
+            _ => {
+                (event::Status::Ignored, None)
+            }
+        }
+
+    }
 
     // The draw function gets called all the time
-    fn draw(&self, _state: &(), _theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry>{
+    fn draw(&self, _state: &CanvasState, _theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry>{
         // We prepare a new `Frame`
         let size = bounds.size();
         let mut frame = Frame::new(size);
 
         // Add some padding to the extreme points - looks better
         // np means no padding
-        let padding = 0.1;
+        let padding = 0.0;
         let padding_factor = 1.0 + padding;
         let (min_x_np, max_x_np, min_y_np, max_y_np) = graph_location_extremes(&self.graph);
         let (min_x, max_x, min_y, max_y) = (min_x_np * padding_factor, max_x_np * padding_factor, min_y_np * padding_factor, max_y_np * padding_factor);
@@ -359,6 +389,9 @@ impl<Message> canvas::Program<Message> for GraphDisplay<'_> {
 
 struct GraphApp {
     simulation: Simulation<(), (), Undirected>,
+    update_step_counter: usize,
+    simulation_step_size: f32,
+    focused_node: Option<NodeIndex>,
 }
 
 // #[derive(Default)]
@@ -368,8 +401,17 @@ struct GraphAppFlags {
 
 impl Default for GraphAppFlags {
     fn default() -> Self {
-        Self { notes_directory: String::from(".") }
+        Self {
+            notes_directory: String::from("."),
+        }
     }
+}
+
+// Enum to send messages in iced program
+#[derive(Debug, Clone)]
+enum GMessage {
+    GraphClick(Point),
+    GraphicsTick,
 }
 
 impl Application for GraphApp {
@@ -389,6 +431,9 @@ impl Application for GraphApp {
 
         return (Self {
             simulation: Simulation::from_graph(graph, params),
+            update_step_counter: 0,
+            simulation_step_size: 0.055,
+            focused_node: None,
         }, Command::none())
     }
 
@@ -400,18 +445,45 @@ impl Application for GraphApp {
         Theme::Dark
     }
 
-    fn update(&mut self, _message: Self::Message) -> Command<Self::Message> {
-        self.simulation.update(0.055);
+    fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
 
-        let mut velsum = 0.0;
-        let mut count = 0.0;
 
-        for node in self.simulation.get_graph().node_weights() {
-            velsum += (node.velocity.x.powf(2.0) + node.velocity.y.powf(2.0) + node.velocity.z.powf(2.0)).sqrt();
-            count += 1.0;
+        match message {
+            // Event from Canvas
+            GMessage::GraphClick( position ) => { 
+
+               let mut distance_map: HashMap<NodeIndex, f32> = HashMap::new();
+
+                let graph = self.simulation.get_graph();
+
+                // Need to convert position in canvas to position in graph
+                for nodei in graph.node_indices() {
+                    let node = graph.node_weight(nodei).unwrap();
+                    let x_distance = node.location.x - position.x;
+                    let y_distance = node.location.y - position.y;
+                    let distance = (x_distance.powf(2.0) + y_distance.powf(2.0)).sqrt();
+
+                    distance_map.insert(nodei, distance);
+                }
+                let maxi = distance_map.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
+                println!("{}", maxi.1);
+
+
+                // We are allowed to update the graph display again
+                self.update_step_counter = 0;
+            },
+
+            // Timebased tick to update simulation
+            // Don't update the simulation forever
+            // Save resources
+            GMessage::GraphicsTick => {
+                if self.update_step_counter < 1000 {
+                    self.simulation.update(self.simulation_step_size);
+                    self.update_step_counter += 1;
+                }
+
+            }
         }
-        let mean = velsum / count;
-        println!("{}", mean);
 
         Command::none()
     }
@@ -422,11 +494,12 @@ impl Application for GraphApp {
 
     // Continuously update the graph (15ms ~ 60fps)
     // Might not want to set a fixed time
-    fn subscription(&self) -> Subscription<GMessage> {
+    fn subscription(&self) -> Subscription<Self::Message> {
         iced::time::every(std::time::Duration::from_millis(15)).map(|_| {
-            GMessage::GraphEvent
+            GMessage::GraphicsTick
         })
     }
+
 }
 
 
