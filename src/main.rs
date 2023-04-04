@@ -19,7 +19,7 @@ use fdg_sim::{
     force::handy,
 };
 
-use iced::widget::canvas::{self, Canvas, Cursor, Frame, Geometry, Stroke, Event};  // Fill,  , Event
+use iced::widget::canvas::{self, Canvas, Cursor, Frame, Geometry, Stroke};  // Fill,  , Event
 use iced::widget::canvas::event;
 use iced::{Color, Rectangle, Theme, Length}; //, Size
 use iced::executor;
@@ -228,7 +228,7 @@ fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
 }
 
 // Calculate the maximum and minimum coordinates for the graph nodes
-fn graph_location_extremes(graph: &ForceGraph<(), ()>) -> (f32, f32, f32, f32) {
+fn graph_bounds(graph: &ForceGraph<(), ()>) -> Rectangle {
 
     let mut min_x = 0.0;
     let mut max_x = 0.0;
@@ -273,8 +273,32 @@ fn graph_location_extremes(graph: &ForceGraph<(), ()>) -> (f32, f32, f32, f32) {
         };
     }
 
-    return (min_x, max_x, min_y, max_y);
+    Rectangle { x: min_x, y: min_y, width: max_x - min_x, height: max_y - min_y }
 
+}
+
+
+fn canvas_location_to_graph_location(graph_bounds: &Rectangle, point: Point, padding_factor: f32, canvas_bounds: &Rectangle ) -> Point {
+
+    let width_factor = canvas_bounds.width / (graph_bounds.width * padding_factor);
+    let height_factor = canvas_bounds.height / (graph_bounds.height * padding_factor);
+
+    return Point::new(
+        point.x / width_factor - (canvas_bounds.x - graph_bounds.x),
+        point.y / height_factor - (canvas_bounds.y - graph_bounds.y)
+    )
+}
+
+fn graph_location_to_canvas_location(graph_bounds: &Rectangle, point: Point, padding_factor: f32, canvas_bounds: &Rectangle) -> Point {
+
+    let width_factor = canvas_bounds.width / (graph_bounds.width * padding_factor);
+    let height_factor = canvas_bounds.height / (graph_bounds.height * padding_factor);
+
+    // the Rectangle location is defined from the top left corner
+    return Point::new(
+        (point.x + (canvas_bounds.x - graph_bounds.x)) * width_factor,
+        (point.y + (canvas_bounds.y - graph_bounds.y)) * height_factor
+    )
 }
 
 
@@ -282,6 +306,7 @@ fn graph_location_extremes(graph: &ForceGraph<(), ()>) -> (f32, f32, f32, f32) {
 struct GraphDisplay<'a> {
     graph: &'a ForceGraph<(), ()>,
     point_radius: f32,
+    padding_factor: f32,
 }
 
 impl GraphDisplay<'_> {
@@ -290,6 +315,7 @@ impl GraphDisplay<'_> {
         GraphDisplay {
             graph,
             point_radius: 2.5,
+            padding_factor: 1.1,
         }
     }
 }
@@ -305,13 +331,38 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
 
     type State = CanvasState;
 
-    fn update(&self, state: &mut CanvasState, event: iced::widget::canvas::Event, _bound: Rectangle, _cursor: Cursor) -> (event::Status, Option<GMessage>) {
+    fn update(&self, state: &mut CanvasState, event: iced::widget::canvas::Event, bound: Rectangle, _cursor: Cursor) -> (event::Status, Option<GMessage>) {
 
         match event {
             // Button was pressed
             canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
                 state.left_button_pressed = true;
-                (event::Status::Captured, Some(GMessage::GraphClick(state.cursor_position)))
+
+                let bounding_rectangle = graph_bounds(&self.graph);
+                let clicked_point = canvas_location_to_graph_location(&bounding_rectangle, state.cursor_position, self.padding_factor, &bound);
+
+               let mut distance_map: HashMap<NodeIndex, f32> = HashMap::new();
+
+                // Need to convert position in canvas to position in graph
+                for nodei in self.graph.node_indices() {
+                    let node = self.graph.node_weight(nodei).unwrap();
+
+                    let x_distance = node.location.x - clicked_point.x;
+                    let y_distance = node.location.y - clicked_point.y;
+
+                    let distance = (x_distance.powf(2.0) + y_distance.powf(2.0)).sqrt();
+
+                    distance_map.insert(nodei, distance);
+                }
+                let mini = distance_map.iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
+
+                if mini.1 < &100.0 {
+                    return (event::Status::Captured, Some(GMessage::GraphClick(Some(*mini.0)))); // TODO is dereferenc correct?
+                }
+                else {
+                    return (event::Status::Captured, Some(GMessage::GraphClick(None)));
+                }
+
             },
             // In case we need to check for releasing cursor button
             canvas::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
@@ -342,45 +393,25 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
         let size = bounds.size();
         let mut frame = Frame::new(size);
 
-        // Add some padding to the extreme points - looks better
-        // np means no padding
-        let padding = 0.0;
-        let padding_factor = 1.0 + padding;
-        let (min_x_np, max_x_np, min_y_np, max_y_np) = graph_location_extremes(&self.graph);
-        let (min_x, max_x, min_y, max_y) = (min_x_np * padding_factor, max_x_np * padding_factor, min_y_np * padding_factor, max_y_np * padding_factor);
+        let graph_bounding_rectangle = graph_bounds(&self.graph);
 
-        // Compute the distance between extreme points and scaling factors for the window
-        let x_width = max_x - min_x;
-        let y_width = max_y - min_y;
-        let width_factor = size.width / x_width;
-        let height_factor = size.height / y_width;
-
-        // Shift the node coordinates such that the minimum is shifted to the origin
-        // Then paint the node on the canvas as a point
         for node in self.graph.node_weights() {
+            let canvas_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(node.location[0], node.location[1]), self.padding_factor, &bounds);
 
-            let point = Point::new((node.location[0] - min_x) * width_factor, (node.location[1] - min_y) * height_factor);
-
-            let circle = canvas::Path::circle(point, self.point_radius);
+            let circle = canvas::Path::circle(canvas_point, self.point_radius);
             frame.fill(&circle, Color::WHITE);
         }
 
-        // Draw the links between nodes (edges) as lines
         for edge in self.graph.edge_references() {
-
-            // Get the location of the nodes
             let source = self.graph[edge.source()].location;
             let target = self.graph[edge.target()].location;
 
-            // Translate location to points on current canvas
-            let source_point = Point::new((source[0] - min_x) * width_factor, (source[1] - min_y) * height_factor);
-            let target_point = Point::new((target[0] - min_x) * width_factor, (target[1] - min_y) * height_factor);
+            let source_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(source[0], source[1]), self.padding_factor, &bounds);
+            let target_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(target[0], target[1]), self.padding_factor, &bounds);
 
-            // Draw a line between the points
             let edge_path = canvas::Path::line(source_point, target_point);
             let stroke_style = Stroke::default().with_color(Color::WHITE);
             frame.stroke(&edge_path, stroke_style);
-
         }
 
         vec![frame.into_geometry()]
@@ -391,7 +422,6 @@ struct GraphApp {
     simulation: Simulation<(), (), Undirected>,
     update_step_counter: usize,
     simulation_step_size: f32,
-    focused_node: Option<NodeIndex>,
 }
 
 // #[derive(Default)]
@@ -410,7 +440,7 @@ impl Default for GraphAppFlags {
 // Enum to send messages in iced program
 #[derive(Debug, Clone)]
 enum GMessage {
-    GraphClick(Point),
+    GraphClick(Option<NodeIndex>),
     GraphicsTick,
 }
 
@@ -433,7 +463,7 @@ impl Application for GraphApp {
             simulation: Simulation::from_graph(graph, params),
             update_step_counter: 0,
             simulation_step_size: 0.055,
-            focused_node: None,
+            // focused_node: None,
         }, Command::none())
     }
 
@@ -450,24 +480,17 @@ impl Application for GraphApp {
 
         match message {
             // Event from Canvas
-            GMessage::GraphClick( position ) => { 
+            GMessage::GraphClick( node_index_option ) => { 
 
-               let mut distance_map: HashMap<NodeIndex, f32> = HashMap::new();
-
-                let graph = self.simulation.get_graph();
-
-                // Need to convert position in canvas to position in graph
-                for nodei in graph.node_indices() {
-                    let node = graph.node_weight(nodei).unwrap();
-                    let x_distance = node.location.x - position.x;
-                    let y_distance = node.location.y - position.y;
-                    let distance = (x_distance.powf(2.0) + y_distance.powf(2.0)).sqrt();
-
-                    distance_map.insert(nodei, distance);
+                match node_index_option {
+                    Some(node_index) => {
+                        let node = &self.simulation.get_graph()[node_index];
+                        println!("Clicked: {:?}", node);
+                    },
+                    None => {
+                        println!("Not clicked on a node")
+                    }
                 }
-                let maxi = distance_map.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
-                println!("{}", maxi.1);
-
 
                 // We are allowed to update the graph display again
                 self.update_step_counter = 0;
