@@ -327,6 +327,7 @@ struct CanvasState {
     zoom_level: f32,
     transpose_x: f32,
     transpose_y: f32,
+    active_node: Option<NodeIndex>,
 }
 
 impl Default for CanvasState {
@@ -340,6 +341,7 @@ impl Default for CanvasState {
             zoom_level: 1.0,
             transpose_x: 0.0,
             transpose_y: 0.0,
+            active_node: None,
         }
     }
 }
@@ -380,6 +382,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                 let mini = distance_map.iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
 
                 if mini.1 < &100.0 {
+                    state.active_node = Some(*mini.0);
                     return (event::Status::Captured, Some(GMessage::GraphClick(Some(*mini.0)))); // TODO is dereferenc correct?
                 }
                 else {
@@ -442,21 +445,76 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
     }
 
     // The draw function gets called all the time
-    fn draw(&self, state: &CanvasState, _theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry>{
+    fn draw(&self, state: &CanvasState, theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry>{
         // We prepare a new `Frame`
         let size = bounds.size();
         let mut frame = Frame::new(size);
 
         let graph_bounding_rectangle = graph_bounds(&self.graph);
 
-        for node in self.graph.node_weights() {
+        for nodei in self.graph.node_indices() {
+
+            let node = &self.graph[nodei];
+
             let canvas_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(node.location[0], node.location[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
 
             let circle = canvas::Path::circle(canvas_point, state.point_radius * state.zoom_level);
-            frame.fill(&circle, Color::WHITE);
+
+            let color: Color = match state.active_node {
+                Some(active_index) => {
+
+                    let mut connect_to_active = false;
+                    for node_index in self.graph.neighbors_undirected(nodei).into_iter() {
+                        if active_index.eq(&node_index) {
+                            connect_to_active = true;
+                        }
+                    }
+
+                    if active_index.eq(&nodei) || connect_to_active {
+                        theme.palette().success
+                    } else {
+                        theme.palette().primary
+                    }
+                },
+                None => {
+                    theme.palette().primary
+                }
+            };
+
+            frame.fill(&circle, color);
+
+            // Draw text if large enough
+            let text_size = 1.5 * state.point_radius * state.zoom_level;
+            if text_size > 8.0 {
+                let text = canvas::Text {
+                    content: node.name.clone(),
+                    position: Point::new(canvas_point.x + state.point_radius + 1.0, canvas_point.y),
+                    size: text_size,
+                    color: theme.palette().text,
+                    ..Default::default()
+                };
+
+                frame.fill_text(text);
+            }
+
         }
 
         for edge in self.graph.edge_references() {
+
+            let color: Color = match state.active_node {
+                Some(active_index) => {
+
+                    if active_index.eq(&edge.source()) || active_index.eq(&edge.target()) {
+                        theme.palette().success
+                    } else {
+                        theme.palette().primary
+                    }
+                },
+                None => {
+                    theme.palette().primary
+                }
+            };
+
             let source = self.graph[edge.source()].location;
             let target = self.graph[edge.target()].location;
 
@@ -464,7 +522,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
             let target_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(target[0], target[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
 
             let edge_path = canvas::Path::line(source_point, target_point);
-            let stroke_style = Stroke::default().with_color(Color::WHITE);
+            let stroke_style = Stroke::default().with_color(color);
             frame.stroke(&edge_path, stroke_style);
         }
 
