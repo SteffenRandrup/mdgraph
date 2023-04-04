@@ -19,6 +19,7 @@ use fdg_sim::{
     force::handy,
 };
 
+use iced::mouse::ScrollDelta;
 use iced::widget::canvas::{self, Canvas, Cursor, Frame, Geometry, Stroke};  // Fill,  , Event
 use iced::widget::canvas::event;
 use iced::{Color, Rectangle, Theme, Length}; //, Size
@@ -278,26 +279,26 @@ fn graph_bounds(graph: &ForceGraph<(), ()>) -> Rectangle {
 }
 
 
-fn canvas_location_to_graph_location(graph_bounds: &Rectangle, point: Point, padding: f32, canvas_bounds: &Rectangle ) -> Point {
+fn canvas_location_to_graph_location(graph_bounds: &Rectangle, point: Point, padding: f32, canvas_bounds: &Rectangle, zoom_level: f32, transpose_x: f32, transpose_y: f32 ) -> Point {
 
-    let width_factor = (canvas_bounds.width - 2.0 * padding) / graph_bounds.width;
-    let height_factor = (canvas_bounds.height - 2.0 * padding) / graph_bounds.height;
+    let width_factor = (canvas_bounds.width - 2.0 * padding) / graph_bounds.width * zoom_level;
+    let height_factor = (canvas_bounds.height - 2.0 * padding) / graph_bounds.height * zoom_level;
 
     return Point::new(
-        (point.x - padding) / width_factor - (canvas_bounds.x - graph_bounds.x),
-        (point.y - padding) / height_factor - (canvas_bounds.y - graph_bounds.y)
+        (point.x - padding - transpose_x) / width_factor - (canvas_bounds.x - graph_bounds.x),
+        (point.y - padding - transpose_y) / height_factor - (canvas_bounds.y - graph_bounds.y)
     )
 }
 
-fn graph_location_to_canvas_location(graph_bounds: &Rectangle, point: Point, padding: f32, canvas_bounds: &Rectangle) -> Point {
+fn graph_location_to_canvas_location(graph_bounds: &Rectangle, point: Point, padding: f32, canvas_bounds: &Rectangle, zoom_level: f32, transpose_x: f32, transpose_y: f32) -> Point {
 
-    let width_factor = (canvas_bounds.width - 2.0 * padding) / graph_bounds.width;
-    let height_factor = (canvas_bounds.height - 2.0 * padding) / graph_bounds.height;
+    let width_factor = (canvas_bounds.width - 2.0 * padding) / graph_bounds.width * zoom_level;
+    let height_factor = (canvas_bounds.height - 2.0 * padding) / graph_bounds.height * zoom_level;
 
     // the Rectangle location is defined from the top left corner
     return Point::new(
-        (point.x + (canvas_bounds.x - graph_bounds.x)) * width_factor + padding,
-        (point.y + (canvas_bounds.y - graph_bounds.y)) * height_factor + padding
+        (point.x + (canvas_bounds.x - graph_bounds.x)) * width_factor + padding + transpose_x,
+        (point.y + (canvas_bounds.y - graph_bounds.y)) * height_factor + padding + transpose_y
     )
 }
 
@@ -305,8 +306,6 @@ fn graph_location_to_canvas_location(graph_bounds: &Rectangle, point: Point, pad
 #[derive(Debug)]
 struct GraphDisplay<'a> {
     graph: &'a ForceGraph<(), ()>,
-    point_radius: f32,
-    padding: f32,
 }
 
 impl GraphDisplay<'_> {
@@ -314,16 +313,35 @@ impl GraphDisplay<'_> {
 
         GraphDisplay {
             graph,
-            point_radius: 2.5,
-            padding: 20.0,
         }
     }
 }
 
-#[derive(Default)]
+// #[derive(Default)]
 struct CanvasState {
     cursor_position: iced::Point,
     left_button_pressed: bool,
+    position_drag_last: iced::Point,
+    point_radius: f32,
+    padding: f32,
+    zoom_level: f32,
+    transpose_x: f32,
+    transpose_y: f32,
+}
+
+impl Default for CanvasState {
+    fn default() -> Self {
+        Self {
+            cursor_position: iced::Point::default(),
+            position_drag_last: iced::Point::default(),
+            left_button_pressed: false,
+            point_radius: 3.0,
+            padding: 20.0,
+            zoom_level: 1.0,
+            transpose_x: 0.0,
+            transpose_y: 0.0,
+        }
+    }
 }
 
 // Canvas needs Program impl
@@ -336,16 +354,17 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
         match event {
             // Button was pressed
             canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                // Safe to unwrap, because we just clicked the canvas and therefore have focus
+                let cursor_position = canvas::Cursor::position(&cursor).unwrap();
                 state.left_button_pressed = true;
+                state.position_drag_last = cursor_position;
 
                 let bounding_rectangle = graph_bounds(&self.graph);
 
-                // Safe to unwrap, because we just clicked the canvas and therefore have focus
-                let cursor_position = canvas::Cursor::position(&cursor).unwrap();
 
-                let clicked_point = canvas_location_to_graph_location(&bounding_rectangle, cursor_position, self.padding, &bound);
+                let clicked_point = canvas_location_to_graph_location(&bounding_rectangle, cursor_position, state.padding, &bound, state.zoom_level, state.transpose_x, state.transpose_y);
 
-               let mut distance_map: HashMap<NodeIndex, f32> = HashMap::new();
+                let mut distance_map: HashMap<NodeIndex, f32> = HashMap::new();
 
                 // Need to convert position in canvas to position in graph
                 for nodei in self.graph.node_indices() {
@@ -378,10 +397,41 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
             canvas::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
 
                 // Update state to reflect cursor position
-                // then acknowledge
                 state.cursor_position = position;
+
+                // If the button has not yet been released, we are draggin
+                // This should tranpose the contents of the canvas
+                if state.left_button_pressed {
+                    state.transpose_x -= state.position_drag_last.x - position.x;
+                    state.transpose_y -= state.position_drag_last.y - position.y;
+                    state.position_drag_last = position;
+                }
                 (event::Status::Captured, None)
             },
+
+            // When the scrollwheel is moved, we should adjust the zoom level
+            canvas::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) => {
+
+                let old_zoom_level = state.zoom_level;
+                match delta {
+                    ScrollDelta::Lines {y, ..} | ScrollDelta::Pixels {y, ..} => {
+
+                        // Maybe not hardcode the maximum scale levels?
+                        if y < 0.0 && state.zoom_level > 0.1 || y > 0.0 && state.zoom_level < 3.0 {
+                            state.zoom_level = state.zoom_level * (1.0 + y / 30.0);
+
+                            let cursor_to_center = cursor.position_from(bound.center()).unwrap();
+                            let factor = state.zoom_level - old_zoom_level;
+
+                            // Correct transpose values - TODO keep cursor position fixed?
+                            state.transpose_x += cursor_to_center.x * factor / (old_zoom_level * old_zoom_level);
+                            state.transpose_y += cursor_to_center.y * factor / (old_zoom_level * old_zoom_level);
+                        }
+                    }
+                }
+
+                (event::Status::Captured, None)
+            }
 
             // Ignore all other events
             _ => {
@@ -392,7 +442,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
     }
 
     // The draw function gets called all the time
-    fn draw(&self, _state: &CanvasState, _theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry>{
+    fn draw(&self, state: &CanvasState, _theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry>{
         // We prepare a new `Frame`
         let size = bounds.size();
         let mut frame = Frame::new(size);
@@ -400,9 +450,9 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
         let graph_bounding_rectangle = graph_bounds(&self.graph);
 
         for node in self.graph.node_weights() {
-            let canvas_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(node.location[0], node.location[1]), self.padding, &bounds);
+            let canvas_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(node.location[0], node.location[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
 
-            let circle = canvas::Path::circle(canvas_point, self.point_radius);
+            let circle = canvas::Path::circle(canvas_point, state.point_radius * state.zoom_level);
             frame.fill(&circle, Color::WHITE);
         }
 
@@ -410,8 +460,8 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
             let source = self.graph[edge.source()].location;
             let target = self.graph[edge.target()].location;
 
-            let source_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(source[0], source[1]), self.padding, &bounds);
-            let target_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(target[0], target[1]), self.padding, &bounds);
+            let source_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(source[0], source[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
+            let target_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(target[0], target[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
 
             let edge_path = canvas::Path::line(source_point, target_point);
             let stroke_style = Stroke::default().with_color(Color::WHITE);
