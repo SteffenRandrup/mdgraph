@@ -458,7 +458,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
 
             let canvas_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(node.location[0], node.location[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
 
-            let circle = canvas::Path::circle(canvas_point, state.point_radius * state.zoom_level);
+            let circle = canvas::Path::circle(canvas_point, state.point_radius * (0.9 + 0.1 * state.zoom_level));
 
             let color: Color = match state.active_node {
                 Some(active_index) => {
@@ -490,7 +490,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                     content: node.name.clone(),
                     position: Point::new(canvas_point.x + state.point_radius + 1.0, canvas_point.y),
                     size: text_size,
-                    color: theme.palette().text,
+                    color: color,
                     ..Default::default()
                 };
 
