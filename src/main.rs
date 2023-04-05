@@ -303,19 +303,19 @@ fn graph_location_to_canvas_location(graph_bounds: &Rectangle, point: Point, pad
 }
 
 
-#[derive(Debug)]
-struct GraphDisplay<'a> {
-    graph: &'a ForceGraph<(), ()>,
-}
+// #[derive(Debug)]
+// struct GraphDisplay<'a> {
+//     graph: &'a ForceGraph<(), ()>,
+// }
 
-impl GraphDisplay<'_> {
-    pub fn new(graph: &ForceGraph<(), ()>) -> GraphDisplay<'_> {
+// impl GraphDisplay<'_> {
+//     pub fn new(graph: &ForceGraph<(), ()>) -> GraphDisplay<'_> {
 
-        GraphDisplay {
-            graph,
-        }
-    }
-}
+//         GraphDisplay {
+//             graph,
+//         }
+//     }
+// }
 
 // #[derive(Default)]
 struct CanvasState {
@@ -347,11 +347,15 @@ impl Default for CanvasState {
 }
 
 // Canvas needs Program impl
-impl canvas::Program<GMessage> for GraphDisplay<'_> {
+// impl canvas::Program<GMessage> for GraphDisplay<'_> {
+impl canvas::Program<GMessage> for GraphApp {
 
     type State = CanvasState;
 
+
     fn update(&self, state: &mut CanvasState, event: iced::widget::canvas::Event, bound: Rectangle, cursor: Cursor) -> (event::Status, Option<GMessage>) {
+
+        let graph = self.simulation.get_graph();
 
         match event {
             // Button was pressed
@@ -361,7 +365,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                 state.left_button_pressed = true;
                 state.position_drag_last = cursor_position;
 
-                let bounding_rectangle = graph_bounds(&self.graph);
+                let bounding_rectangle = graph_bounds(&graph);
 
 
                 let clicked_point = canvas_location_to_graph_location(&bounding_rectangle, cursor_position, state.padding, &bound, state.zoom_level, state.transpose_x, state.transpose_y);
@@ -369,8 +373,8 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                 let mut distance_map: HashMap<NodeIndex, f32> = HashMap::new();
 
                 // Need to convert position in canvas to position in graph
-                for nodei in self.graph.node_indices() {
-                    let node = self.graph.node_weight(nodei).unwrap();
+                for nodei in graph.node_indices() {
+                    let node = graph.node_weight(nodei).unwrap();
 
                     let x_distance = node.location.x - clicked_point.x;
                     let y_distance = node.location.y - clicked_point.y;
@@ -449,12 +453,13 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
         // We prepare a new `Frame`
         let size = bounds.size();
         let mut frame = Frame::new(size);
+        let graph = self.simulation.get_graph();
 
-        let graph_bounding_rectangle = graph_bounds(&self.graph);
+        let graph_bounding_rectangle = graph_bounds(graph);
 
-        for nodei in self.graph.node_indices() {
+        for nodei in graph.node_indices() {
 
-            let node = &self.graph[nodei];
+            let node = &graph[nodei];
 
             let canvas_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(node.location[0], node.location[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
 
@@ -464,7 +469,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                 Some(active_index) => {
 
                     let mut connect_to_active = false;
-                    for node_index in self.graph.neighbors_undirected(nodei).into_iter() {
+                    for node_index in graph.neighbors_undirected(nodei).into_iter() {
                         if active_index.eq(&node_index) {
                             connect_to_active = true;
                         }
@@ -499,7 +504,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
 
         }
 
-        for edge in self.graph.edge_references() {
+        for edge in graph.edge_references() {
 
             let color: Color = match state.active_node {
                 Some(active_index) => {
@@ -515,8 +520,8 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                 }
             };
 
-            let source = self.graph[edge.source()].location;
-            let target = self.graph[edge.target()].location;
+            let source = graph[edge.source()].location;
+            let target = graph[edge.target()].location;
 
             let source_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(source[0], source[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
             let target_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(target[0], target[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
@@ -524,6 +529,17 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
             let edge_path = canvas::Path::line(source_point, target_point);
             let stroke_style = Stroke::default().with_color(color);
             frame.stroke(&edge_path, stroke_style);
+
+            match state.active_node {
+                Some(active_index) => {
+                    if active_index.eq(&edge.source()) || active_index.eq(&edge.target()) {
+                        let intemediary_point = Point::new((target_point.x - source_point.x) * self.visualization_frac + source_point.x,  (target_point.y - source_point.y) * self.visualization_frac + source_point.y);
+                        let inter_circle = canvas::Path::circle(intemediary_point, state.point_radius * (0.6 + 0.1 * state.zoom_level));
+                        frame.fill(&inter_circle, color);
+                    }
+                }
+                _ => { }
+            }
         }
 
         vec![frame.into_geometry()]
@@ -533,6 +549,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
 struct GraphApp {
     simulation: Simulation<(), (), Undirected>,
     update_step_counter: usize,
+    visualization_frac: f32,
     simulation_step_size: f32,
 }
 
@@ -574,6 +591,7 @@ impl Application for GraphApp {
         return (Self {
             simulation: Simulation::from_graph(graph, params),
             update_step_counter: 0,
+            visualization_frac: 0.0,
             simulation_step_size: 0.055,
             // focused_node: None,
         }, Command::none())
@@ -616,7 +634,7 @@ impl Application for GraphApp {
                     self.simulation.update(self.simulation_step_size);
                     self.update_step_counter += 1;
                 }
-
+                self.visualization_frac = (self.visualization_frac + 1.0/120.0) % 1.0;
             }
         }
 
@@ -624,7 +642,10 @@ impl Application for GraphApp {
     }
 
     fn view(&self) -> Element<Self::Message> {
-        return Canvas::new(GraphDisplay::new(&self.simulation.get_graph())).width(Length::Fill).height(Length::Fill).into()
+        // First Create a canvas, which has the same type as the application
+        // Then return a widget containing that application
+        let canvas: Canvas<GMessage, Theme, &GraphApp> = iced::widget::canvas(self as &Self).width(Length::Fill).height(Length::Fill).into();
+        return iced::widget::container(canvas).width(Length::Fill).height(Length::Fill).padding(0).into();
     }
 
     // Continuously update the graph (15ms ~ 60fps)
