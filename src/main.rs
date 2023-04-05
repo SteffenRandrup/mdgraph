@@ -89,7 +89,7 @@ fn get_files(notes_directory: &Path)  -> Result<Vec<PathBuf>, Box<dyn std::error
 
 }
 
-fn generate_graph(notes_directory: &String) -> ForceGraph<(),()> {
+fn generate_graph(notes_directory: &PathBuf) -> ForceGraph<(),()> {
 
     // initialize a graph
     let mut graph: ForceGraph<(), ()> = ForceGraph::default();
@@ -448,6 +448,20 @@ impl canvas::Program<GMessage> for GraphApp {
 
     }
 
+    fn mouse_interaction(
+            &self,
+            state: &Self::State,
+            _bounds: Rectangle,
+            _cursor: Cursor,
+        ) -> iced::mouse::Interaction {
+
+        if state.left_button_pressed {
+            return iced::mouse::Interaction::Grabbing;
+        }
+        
+        return iced::mouse::Interaction::Idle;
+    }
+
     // The draw function gets called all the time
     fn draw(&self, state: &CanvasState, theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry>{
         // We prepare a new `Frame`
@@ -555,13 +569,13 @@ struct GraphApp {
 
 // #[derive(Default)]
 struct GraphAppFlags {
-    notes_directory: String, // TODO shouldn't this be a Path?
+    notes_directory: PathBuf, // Using PathBuf, because Path doesn't have Size
 }
 
 impl Default for GraphAppFlags {
     fn default() -> Self {
         Self {
-            notes_directory: String::from("."),
+            notes_directory: PathBuf::from("."),
         }
     }
 }
@@ -593,7 +607,6 @@ impl Application for GraphApp {
             update_step_counter: 0,
             visualization_frac: 0.0,
             simulation_step_size: 0.055,
-            // focused_node: None,
         }, Command::none())
     }
 
@@ -665,15 +678,15 @@ fn main() {
     // Default to current directory
     let args: Vec<String> = env::args().collect();
 
-    let notes_dir = match args.len() {
+    let notes_dir: PathBuf = match args.len() {
         1 => { 
             println!("Using default dir");
-            String::from_str(".").unwrap()
+            PathBuf::from(".")
         },
         2 => {
             let d = &args[1];
             println!("Using {}", d);
-            String::from_str(d).unwrap()
+            PathBuf::from(d)
         }
         _ => { 
             println!("Invalid arguments");
