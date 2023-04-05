@@ -24,6 +24,7 @@ use iced::widget::canvas::event;
 use iced::{Color, Rectangle, Theme, Length}; //, Size
 use iced::executor;
 use iced::{Application, Command, Element, Settings, Point, Subscription};
+use iced::theme::Palette;
 
 use gitignore;
 use walkdir::WalkDir;
@@ -483,18 +484,18 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
 
             let circle = canvas::Path::circle(canvas_point, state.point_radius * (0.9 + 0.1 * state.zoom_level));
 
+            let mut connect_to_active = false;
             let color: Color = match self.graph_state.active_node {
                 Some(active_index) => {
 
-                    let mut connect_to_active = false;
                     for node_index in graph.neighbors_undirected(nodei).into_iter() {
-                        if active_index.eq(&node_index) {
+                        if active_index.eq(&node_index) || active_index.eq(&nodei) {
                             connect_to_active = true;
                         }
                     }
 
-                    if active_index.eq(&nodei) || connect_to_active {
-                        theme.palette().success
+                    if connect_to_active {
+                        theme.palette().text
                     } else {
                         theme.palette().primary
                     }
@@ -509,11 +510,17 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
             // Draw text if large enough
             let text_size = 1.5 * state.point_radius * state.zoom_level;
             if text_size > 8.0 {
+
+                let text_color = match connect_to_active {
+                    true => { theme.palette().text },
+                    false => { theme.palette().primary }
+                };
+
                 let text = canvas::Text {
                     content: node.name.clone(),
                     position: Point::new(canvas_point.x + state.point_radius + 1.0, canvas_point.y),
                     size: text_size,
-                    color: color,
+                    color: text_color,
                     ..Default::default()
                 };
 
@@ -528,7 +535,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                 Some(active_index) => {
 
                     if active_index.eq(&edge.source()) || active_index.eq(&edge.target()) {
-                        theme.palette().success
+                        theme.palette().text
                     } else {
                         theme.palette().primary
                     }
@@ -553,7 +560,7 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                     if active_index.eq(&edge.source()) || active_index.eq(&edge.target()) {
                         let intemediary_point = Point::new((target_point.x - source_point.x) * self.graph_state.visualization_frac + source_point.x,  (target_point.y - source_point.y) * self.graph_state.visualization_frac + source_point.y);
                         let inter_circle = canvas::Path::circle(intemediary_point, state.point_radius * (0.6 + 0.1 * state.zoom_level));
-                        frame.fill(&inter_circle, color);
+                        frame.fill(&inter_circle, theme.palette().success);
                     }
                 }
                 _ => { }
@@ -634,7 +641,13 @@ impl Application for GraphApp {
     }
 
     fn theme(&self) -> Theme {
-        Theme::Dark
+        Theme::custom(Palette {
+            background: Color::from_rgba8(46, 52, 64, 1.0),
+            text: Color::from_rgba8(229, 233, 240, 1.0),
+            primary: Color::from_rgba8(216, 222, 233, 0.3),
+            success: Color::from_rgba8(136, 192, 208, 1.0),
+            danger: Color::from_rgba8(191, 97, 106, 1.0)
+        })
     }
 
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
