@@ -1,236 +1,31 @@
-use std::cmp::min;
+mod graphreader;
+
 use std::env;
-use std::path::Path;
 use std::path::PathBuf;
-use std::io::prelude::*;
-use std::fs;
-
-// use fdg_sim::force::Force;
-use fdg_sim::{ForceGraph, ForceGraphHelper, Simulation, SimulationParameters};
-
-use fdg_sim::{
-    petgraph::{
-        visit::{EdgeRef, IntoEdgeReferences},
-        Undirected,
-        graph::NodeIndex,
-    },
-    self,
-    force::handy,
-};
-
-use iced::mouse::ScrollDelta;
-use iced::widget::canvas::{self, Canvas, Cursor, Frame, Geometry, Stroke};  // Fill,  , Event
-use iced::widget::canvas::event;
-use iced::{Color, Rectangle, Theme, Length}; //, Size
-use iced::executor;
-use iced::{Application, Command, Element, Settings, Point, Subscription};
-use iced::theme::Palette;
-
-use gitignore;
-use walkdir::WalkDir;
-
-use grep_searcher::sinks::UTF8;
-use grep_regex::RegexMatcher;
-use grep_searcher::Searcher;
-use grep_matcher::{Matcher,Captures};
 use std::collections::HashMap;
 
-fn get_files(notes_directory: &Path)  -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+use fdg_sim::{ForceGraph, Simulation, SimulationParameters};
+use fdg_sim::{
+    self,
+    force::handy,
+    petgraph::{
+        graph::NodeIndex,
+        visit::{EdgeRef, IntoEdgeReferences},
+        Undirected,
+    },
+};
 
-    // First check if the directory exists!
-    if !notes_directory.exists() {
-        println!("{:} does not exist", notes_directory.display());
-        return Err(Box::from("Directory does not exist"));
-    }
+use iced::executor;
+use iced::mouse::ScrollDelta;
+use iced::theme::Palette;
+use iced::widget::canvas::event;
+use iced::widget::canvas::{self, Canvas, Cursor, Frame, Geometry, Stroke}; // Fill,  , Event
+use iced::{Application, Command, Element, Point, Settings, Subscription};
+use iced::{Color, Length, Rectangle, Theme}; //, Size
 
-    // If the path is not a directory, we can't work with it
-    if !notes_directory.is_dir() {
-        println!("{:} is not a directory", notes_directory.display());
-        return Err(Box::from("Path is not a directory"));
-    }
-
-    // Then check if there is a gitignore
-    // If there is, we can return whatever is included as determined by the gitignore crate
-    // If not we can return a list of all files
-    let gitignore_path = notes_directory.join(".gitignore");
-    if gitignore_path.exists() && false {
-        // TODO check that we don't get an error here e.g. if .gitignore is malformed
-        let gitignore_file = gitignore::File::new(&gitignore_path).unwrap();
-        // TODO what happens if gitignore is empty?
-        let included_files = gitignore_file.included_files().unwrap();
-        return Ok(included_files);
-    }
-    // We don't have a gitignore, so we just list the contents
-    else {
-        // This is safe, because we already checked it exists and is dir
-        let mut included_files = Vec::new();
-        for file in WalkDir::new(&notes_directory).into_iter().filter_map(|file| file.ok()){
-            let fp = file.into_path();
-
-            if fp.is_dir() {
-                continue;
-            }
-
-            // Separate out file filtering based on path or filetype
-            match fp.extension() {
-                None => continue,
-                Some(extension) => {
-                    if extension != "md" { continue; }
-                }
-            }
-            included_files.push(fp);
-        }
-
-        if included_files.len() == 0 {
-            return Err(Box::from("No md files found"));
-        }
-        return Ok(included_files);
-    }
-
-}
-
-fn generate_graph(notes_directory: &PathBuf) -> ForceGraph<(),()> {
-
-    // initialize a graph
-    let mut graph: ForceGraph<(), ()> = ForceGraph::default();
-
-    let notes_path = Path::new(notes_directory);
-    let files_vec = get_files(notes_path).unwrap();
-
-    if files_vec.len() == 0 {
-        // TODO is it better to return an empty graph
-        // return Err(Box::from("Cannot build graph from empty list!"));
-        return graph;
-    }
-
-    // Contains the links between notes as described in files
-    let mut directed_links: HashMap<String, Vec<String>> = HashMap::new();
-
-    // We are given a list of file PathBufs
-    // For each one we read the content, then look for links to other files in each line
-    for file_to_search in files_vec {
-
-        if file_to_search.is_dir() { continue; }
-
-        // Read the file
-        let mut f = fs::File::open(file_to_search.as_path()).unwrap();
-        let mut file_content = Vec::new();
-        f.read_to_end(&mut file_content).unwrap();
-
-        // Match markdown wiki-links: [[id-goes-here]]
-        // Match any none-whitespace character or newline within [[..]]
-        let matcher = RegexMatcher::new(r"\[{2}([\S]*)\]{2}.*").unwrap();
-
-        // Search for matches, assuming encoding is UTF-8
-        let mut matches: Vec<String> = vec![];
-        let s = Searcher::new().search_slice(&matcher, &file_content, UTF8(|_, line| {
-
-            // We want capture groups, because we might extend to multiple matches per line
-            // We don't want the [[,]] included, and we might change to also ignore formatting
-            let mut caps = matcher.new_captures().unwrap();
-
-            // For each capture group, we get the first group (corresponding to link id)
-            // and save it
-            let caps = matcher.captures_iter(line.as_bytes(), &mut caps, |local_caps| {
-
-                // Get the 1 capture group. 0 includes entire match, and we only care about
-                // what is contained in the group
-                let capture_group = local_caps.get(1).unwrap();
-                // let capture_group = local_caps.get(0).unwrap();
-
-                // Get the correct bytes from the match
-                // And save it amongst other matches of links
-                let matched = line[capture_group].to_string();
-
-                // If the wiki link contains a title and / or a header identifier e.g.
-                // [[id#header|some title]], we remove everything after the special character
-                let matched_format_point_title = matched.find("|").unwrap_or(matched.len());
-                let matched_format_point_header = matched.find("#").unwrap_or(matched.len());
-                let matched_format_point = min(matched_format_point_title, matched_format_point_header);
-                let matched_name = &matched[0..matched_format_point];
-
-                matches.push(String::from(matched_name));
-
-                true // must return bool, stops iteration if return false
-            });
-            // TODO handle capture group result
-            match caps {
-                Ok(_) => {},
-                Err(_) => {}
-            }
-
-            Ok(true) // Must return Result for Searcher
-        }));
-        // TODO Handle the Result
-        match s {
-            Ok(_) => {},
-            Err(_) => {}
-        }
-
-        // We should always match some, since we already filtered for Markdown...
-        match file_to_search.file_stem() {
-            // Get the file ID fro the filename, takes som coercion
-            Some(f_stem) => {
-
-                // For now don't push something without a mtach
-                directed_links.insert(String::from(f_stem.to_str().unwrap()), matches);
-            },
-            None => {println!("No file stem");} // This should not happen. TODO deal with it!
-        }
-
-    }
-
-    let mut node_names: HashMap<String, NodeIndex> = HashMap::new();
-
-    // Build relation between filename and node id
-    for id in directed_links.keys() {
-        let node = graph.add_force_node(id.to_string(), ());
-
-        node_names.insert(id.to_string(), node);
-    }
-
-    // Build edges in graph
-    for (key, value) in directed_links.iter() {
-
-        // Get the first NodeIndex from its name
-        let first_node = node_names[key];
-
-        // Iterate over linked nodes
-        for second_node_name in value {
-
-            // Handle possible input errors
-            if !node_names.contains_key(second_node_name) {
-                println!("{} is a bad link from {}", second_node_name, key);
-                continue;
-            }
-            // The node references itself - this causes issues for graph simulation
-            if second_node_name == key {
-                println!("Self reference in {}", second_node_name);
-                continue;
-            }
-
-            // Fetch the linked node by name and add an edge to the graph
-            let second_node = node_names[second_node_name];
-            graph.add_edge(first_node, second_node, ());
-        }
-    }
-
-    // Identifiy orphans (nothing linked to or from node) and notify about it
-    for node_name in directed_links.keys() {
-        let node = node_names[node_name];
-
-        // get nodes both connected from the node and other nodes linking to it
-        if graph.neighbors_undirected(node).count() == 0 {
-            println!("{} has no neighbors", node_name);
-        }
-    }
-
-    return graph;
-}
 
 // Calculate the maximum and minimum coordinates for the graph nodes
-fn graph_bounds(graph: &ForceGraph<(), ()>) -> Rectangle {
-
+fn graph_bounds<T, U>(graph: &ForceGraph<T, U>) -> Rectangle {
     let mut min_x = 0.0;
     let mut max_x = 0.0;
     let mut min_y = 0.0;
@@ -240,86 +35,91 @@ fn graph_bounds(graph: &ForceGraph<(), ()>) -> Rectangle {
     // this is to be used for scaling
     // Can't do a min/max, because floats might be NaN, Inf, ...
     for node in graph.node_weights() {
-
         let x = node.location[0];
         let y = node.location[1];
 
         min_x = match min_x.partial_cmp(&x).unwrap() {
-
-            std::cmp::Ordering::Less => { min_x },
-            std::cmp::Ordering::Equal => { x },
-            std::cmp::Ordering::Greater => { x }
-
+            std::cmp::Ordering::Less => min_x,
+            std::cmp::Ordering::Equal => x,
+            std::cmp::Ordering::Greater => x,
         };
         max_x = match max_x.partial_cmp(&x).unwrap() {
-
-            std::cmp::Ordering::Less => { x },
-            std::cmp::Ordering::Equal => { max_x },
-            std::cmp::Ordering::Greater => { max_x }
-
+            std::cmp::Ordering::Less => x,
+            std::cmp::Ordering::Equal => max_x,
+            std::cmp::Ordering::Greater => max_x,
         };
         min_y = match min_y.partial_cmp(&y).unwrap() {
-
-            std::cmp::Ordering::Less => { min_y },
-            std::cmp::Ordering::Equal => { y },
-            std::cmp::Ordering::Greater => { y }
-
+            std::cmp::Ordering::Less => min_y,
+            std::cmp::Ordering::Equal => y,
+            std::cmp::Ordering::Greater => y,
         };
         max_y = match max_y.partial_cmp(&y).unwrap() {
-
-            std::cmp::Ordering::Less => { y },
-            std::cmp::Ordering::Equal => { max_y },
-            std::cmp::Ordering::Greater => { max_y }
-
+            std::cmp::Ordering::Less => y,
+            std::cmp::Ordering::Equal => max_y,
+            std::cmp::Ordering::Greater => max_y,
         };
     }
 
-    Rectangle { x: min_x, y: min_y, width: max_x - min_x, height: max_y - min_y }
-
+    Rectangle {
+        x: min_x,
+        y: min_y,
+        width: max_x - min_x,
+        height: max_y - min_y,
+    }
 }
 
-
-fn canvas_location_to_graph_location(graph_bounds: &Rectangle, point: Point, padding: f32, canvas_bounds: &Rectangle, zoom_level: f32, transpose_x: f32, transpose_y: f32 ) -> Point {
-
+fn canvas_location_to_graph_location(
+    graph_bounds: &Rectangle,
+    point: Point,
+    padding: f32,
+    canvas_bounds: &Rectangle,
+    zoom_level: f32,
+    transpose_x: f32,
+    transpose_y: f32,
+) -> Point {
     let width_factor = (canvas_bounds.width - 2.0 * padding) / graph_bounds.width * zoom_level;
     let height_factor = (canvas_bounds.height - 2.0 * padding) / graph_bounds.height * zoom_level;
 
     return Point::new(
         (point.x - padding - transpose_x) / width_factor - (canvas_bounds.x - graph_bounds.x),
-        (point.y - padding - transpose_y) / height_factor - (canvas_bounds.y - graph_bounds.y)
-    )
+        (point.y - padding - transpose_y) / height_factor - (canvas_bounds.y - graph_bounds.y),
+    );
 }
 
-fn graph_location_to_canvas_location(graph_bounds: &Rectangle, point: Point, padding: f32, canvas_bounds: &Rectangle, zoom_level: f32, transpose_x: f32, transpose_y: f32) -> Point {
-
+fn graph_location_to_canvas_location(
+    graph_bounds: &Rectangle,
+    point: Point,
+    padding: f32,
+    canvas_bounds: &Rectangle,
+    zoom_level: f32,
+    transpose_x: f32,
+    transpose_y: f32,
+) -> Point {
     let width_factor = (canvas_bounds.width - 2.0 * padding) / graph_bounds.width * zoom_level;
     let height_factor = (canvas_bounds.height - 2.0 * padding) / graph_bounds.height * zoom_level;
 
     // the Rectangle location is defined from the top left corner
     return Point::new(
         (point.x + (canvas_bounds.x - graph_bounds.x)) * width_factor + padding + transpose_x,
-        (point.y + (canvas_bounds.y - graph_bounds.y)) * height_factor + padding + transpose_y
-    )
+        (point.y + (canvas_bounds.y - graph_bounds.y)) * height_factor + padding + transpose_y,
+    );
 }
 
-
 // #[derive(Debug)]
-struct GraphDisplay<'a> {
-    graph: &'a ForceGraph<(), ()>,
+struct GraphDisplay<'a, N, E> {
+    graph: &'a ForceGraph<N, E>,
     graph_state: &'a GraphState,
 }
 
-impl GraphDisplay<'_> {
-    pub fn new<'a>(graph: &'a ForceGraph<(), ()>, graph_state: &'a GraphState) -> GraphDisplay<'a> {
-
-        GraphDisplay {
-            graph,
-            graph_state
-        }
+impl<N, E> GraphDisplay<'_, N, E> {
+    pub fn new<'a>(
+        graph: &'a ForceGraph<N, E>,
+        graph_state: &'a GraphState,
+    ) -> GraphDisplay<'a, N, E> {
+        GraphDisplay { graph, graph_state }
     }
 }
 
-// #[derive(Default)]
 struct CanvasState {
     cursor_position: iced::Point,
     left_button_pressed: bool,
@@ -329,7 +129,6 @@ struct CanvasState {
     zoom_level: f32,
     transpose_x: f32,
     transpose_y: f32,
-    // active_node: Option<NodeIndex>,
 }
 
 impl Default for CanvasState {
@@ -343,21 +142,21 @@ impl Default for CanvasState {
             zoom_level: 1.0,
             transpose_x: 0.0,
             transpose_y: 0.0,
-            // active_node: None,
         }
     }
 }
 
-// Canvas needs Program impl
-impl canvas::Program<GMessage> for GraphDisplay<'_> {
-// impl canvas::Program<GMessage> for GraphApp {
-
+// Canvas needs Program impl -- Need generic types for the ForceGraph<N,E>
+impl<N, E> canvas::Program<GMessage> for GraphDisplay<'_, N, E> {
     type State = CanvasState;
 
-
-    fn update(&self, state: &mut CanvasState, event: iced::widget::canvas::Event, bound: Rectangle, cursor: Cursor) -> (event::Status, Option<GMessage>) {
-
-        // let graph = self.simulation.get_graph();
+    fn update(
+        &self,
+        state: &mut CanvasState,
+        event: iced::widget::canvas::Event,
+        bound: Rectangle,
+        cursor: Cursor,
+    ) -> (event::Status, Option<GMessage>) {
         let graph = self.graph;
 
         match event {
@@ -370,8 +169,15 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
 
                 let bounding_rectangle = graph_bounds(&graph);
 
-
-                let clicked_point = canvas_location_to_graph_location(&bounding_rectangle, cursor_position, state.padding, &bound, state.zoom_level, state.transpose_x, state.transpose_y);
+                let clicked_point = canvas_location_to_graph_location(
+                    &bounding_rectangle,
+                    cursor_position,
+                    state.padding,
+                    &bound,
+                    state.zoom_level,
+                    state.transpose_x,
+                    state.transpose_y,
+                );
 
                 let mut distance_map: HashMap<NodeIndex, f32> = HashMap::new();
 
@@ -386,26 +192,28 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
 
                     distance_map.insert(nodei, distance);
                 }
-                let mini = distance_map.iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
+                let mini = distance_map
+                    .iter()
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                    .unwrap();
 
                 if mini.1 < &100.0 {
-                    // self.graph_state.active_node = Some(*mini.0);
-                    return (event::Status::Captured, Some(GMessage::GraphClick(Some(*mini.0)))); // TODO is dereferenc correct?
-                }
-                else {
+                    return (
+                        event::Status::Captured,
+                        Some(GMessage::GraphClick(Some(*mini.0))),
+                    ); // TODO is dereferenc correct?
+                } else {
                     return (event::Status::Captured, Some(GMessage::GraphClick(None)));
                 }
-
-            },
+            }
             // In case we need to check for releasing cursor button
             canvas::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
                 state.left_button_pressed = false;
                 (event::Status::Captured, None)
-            },
+            }
 
             // Cursor was moved
             canvas::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-
                 // Update state to reflect cursor position
                 state.cursor_position = position;
 
@@ -417,15 +225,13 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                     state.position_drag_last = position;
                 }
                 (event::Status::Captured, None)
-            },
+            }
 
             // When the scrollwheel is moved, we should adjust the zoom level
             canvas::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) => {
-
                 let old_zoom_level = state.zoom_level;
                 match delta {
-                    ScrollDelta::Lines {y, ..} | ScrollDelta::Pixels {y, ..} => {
-
+                    ScrollDelta::Lines { y, .. } | ScrollDelta::Pixels { y, .. } => {
                         // Maybe not hardcode the maximum scale levels?
                         if y < 0.0 && state.zoom_level > 0.1 || y > 0.0 && state.zoom_level < 3.0 {
                             state.zoom_level = state.zoom_level * (1.0 + y / 30.0);
@@ -434,8 +240,10 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                             let factor = state.zoom_level - old_zoom_level;
 
                             // Correct transpose values - TODO keep cursor position fixed?
-                            state.transpose_x += cursor_to_center.x * factor / (old_zoom_level * old_zoom_level);
-                            state.transpose_y += cursor_to_center.y * factor / (old_zoom_level * old_zoom_level);
+                            state.transpose_x +=
+                                cursor_to_center.x * factor / (old_zoom_level * old_zoom_level);
+                            state.transpose_y +=
+                                cursor_to_center.y * factor / (old_zoom_level * old_zoom_level);
                         }
                     }
                 }
@@ -444,29 +252,31 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
             }
 
             // Ignore all other events
-            _ => {
-                (event::Status::Ignored, None)
-            }
+            _ => (event::Status::Ignored, None),
         }
-
     }
 
     fn mouse_interaction(
-            &self,
-            state: &Self::State,
-            _bounds: Rectangle,
-            _cursor: Cursor,
-        ) -> iced::mouse::Interaction {
-
+        &self,
+        state: &Self::State,
+        _bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> iced::mouse::Interaction {
         if state.left_button_pressed {
             return iced::mouse::Interaction::Grabbing;
         }
-        
+
         return iced::mouse::Interaction::Idle;
     }
 
     // The draw function gets called all the time
-    fn draw(&self, state: &CanvasState, theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry>{
+    fn draw(
+        &self,
+        state: &CanvasState,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Vec<Geometry> {
         // We prepare a new `Frame`
         let size = bounds.size();
         let mut frame = Frame::new(size);
@@ -477,17 +287,26 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
         let graph_bounding_rectangle = graph_bounds(graph);
 
         for nodei in graph.node_indices() {
-
             let node = &graph[nodei];
 
-            let canvas_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(node.location[0], node.location[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
+            let canvas_point = graph_location_to_canvas_location(
+                &graph_bounding_rectangle,
+                Point::new(node.location[0], node.location[1]),
+                state.padding,
+                &bounds,
+                state.zoom_level,
+                state.transpose_x,
+                state.transpose_y,
+            );
 
-            let circle = canvas::Path::circle(canvas_point, state.point_radius * (0.9 + 0.1 * state.zoom_level));
+            let circle = canvas::Path::circle(
+                canvas_point,
+                state.point_radius * (0.9 + 0.1 * state.zoom_level),
+            );
 
             let mut connect_to_active = false;
             let color: Color = match self.graph_state.active_node {
                 Some(active_index) => {
-
                     for node_index in graph.neighbors_undirected(nodei).into_iter() {
                         if active_index.eq(&node_index) || active_index.eq(&nodei) {
                             connect_to_active = true;
@@ -499,10 +318,8 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
                     } else {
                         theme.palette().primary
                     }
-                },
-                None => {
-                    theme.palette().primary
                 }
+                None => theme.palette().primary,
             };
 
             frame.fill(&circle, color);
@@ -510,10 +327,9 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
             // Draw text if large enough
             let text_size = 1.5 * state.point_radius * state.zoom_level;
             if text_size > 8.0 {
-
                 let text_color = match connect_to_active {
-                    true => { theme.palette().text },
-                    false => { theme.palette().primary }
+                    true => theme.palette().text,
+                    false => theme.palette().primary,
                 };
 
                 let text = canvas::Text {
@@ -526,30 +342,41 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
 
                 frame.fill_text(text);
             }
-
         }
 
         for edge in graph.edge_references() {
-
             let color: Color = match self.graph_state.active_node {
                 Some(active_index) => {
-
                     if active_index.eq(&edge.source()) || active_index.eq(&edge.target()) {
                         theme.palette().text
                     } else {
                         theme.palette().primary
                     }
-                },
-                None => {
-                    theme.palette().primary
                 }
+                None => theme.palette().primary,
             };
 
             let source = graph[edge.source()].location;
             let target = graph[edge.target()].location;
 
-            let source_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(source[0], source[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
-            let target_point = graph_location_to_canvas_location(&graph_bounding_rectangle, Point::new(target[0], target[1]), state.padding, &bounds, state.zoom_level, state.transpose_x, state.transpose_y);
+            let source_point = graph_location_to_canvas_location(
+                &graph_bounding_rectangle,
+                Point::new(source[0], source[1]),
+                state.padding,
+                &bounds,
+                state.zoom_level,
+                state.transpose_x,
+                state.transpose_y,
+            );
+            let target_point = graph_location_to_canvas_location(
+                &graph_bounding_rectangle,
+                Point::new(target[0], target[1]),
+                state.padding,
+                &bounds,
+                state.zoom_level,
+                state.transpose_x,
+                state.transpose_y,
+            );
 
             let edge_path = canvas::Path::line(source_point, target_point);
             let stroke_style = Stroke::default().with_color(color);
@@ -558,12 +385,20 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
             match self.graph_state.active_node {
                 Some(active_index) => {
                     if active_index.eq(&edge.source()) || active_index.eq(&edge.target()) {
-                        let intemediary_point = Point::new((target_point.x - source_point.x) * self.graph_state.visualization_frac + source_point.x,  (target_point.y - source_point.y) * self.graph_state.visualization_frac + source_point.y);
-                        let inter_circle = canvas::Path::circle(intemediary_point, state.point_radius * (0.6 + 0.1 * state.zoom_level));
+                        let intemediary_point = Point::new(
+                            (target_point.x - source_point.x) * self.graph_state.visualization_frac
+                                + source_point.x,
+                            (target_point.y - source_point.y) * self.graph_state.visualization_frac
+                                + source_point.y,
+                        );
+                        let inter_circle = canvas::Path::circle(
+                            intemediary_point,
+                            state.point_radius * (0.6 + 0.1 * state.zoom_level),
+                        );
                         frame.fill(&inter_circle, theme.palette().success);
                     }
                 }
-                _ => { }
+                _ => {}
             }
         }
 
@@ -571,8 +406,8 @@ impl canvas::Program<GMessage> for GraphDisplay<'_> {
     }
 }
 
-struct GraphApp {
-    simulation: Simulation<(), (), Undirected>,
+struct GraphApp<N, E> {
+    simulation: Simulation<N, E, Undirected>,
     update_step_counter: usize,
     simulation_step_size: f32,
     graph_state: GraphState,
@@ -592,16 +427,13 @@ impl Default for GraphState {
     }
 }
 
-// #[derive(Default)]
-struct GraphAppFlags {
-    notes_directory: PathBuf, // Using PathBuf, because Path doesn't have Size
+struct GraphAppFlags<N, E> {
+    graph: ForceGraph<N, E>,
 }
 
-impl Default for GraphAppFlags {
-    fn default() -> Self {
-        Self {
-            notes_directory: PathBuf::from("."),
-        }
+impl<N, E> GraphAppFlags<N, E> {
+    fn from_graph(graph: ForceGraph<N, E>) -> GraphAppFlags<N, E> {
+        return GraphAppFlags { graph };
     }
 }
 
@@ -612,28 +444,27 @@ enum GMessage {
     GraphicsTick,
 }
 
-impl Application for GraphApp {
-
+impl<N, E> Application for GraphApp<N, E> {
     type Executor = executor::Default;
-    type Flags = GraphAppFlags;
+    type Flags = GraphAppFlags<N, E>;
     type Message = GMessage;
     type Theme = Theme;
 
-    fn new(flags: GraphAppFlags) -> (Self, Command<Self::Message>) {
-
-
-        let graph = generate_graph(&flags.notes_directory);
+    fn new(flags: GraphAppFlags<N, E>) -> (Self, Command<Self::Message>) {
+        let graph = flags.graph;
 
         let simforce = handy(200.0, 0.9, true, true);
         let params = SimulationParameters::new(200.0, fdg_sim::Dimensions::Two, simforce);
 
-        return (Self {
-            simulation: Simulation::from_graph(graph, params),
-            update_step_counter: 0,
-            // visualization_frac: 0.0,
-            simulation_step_size: 0.055,
-            graph_state: GraphState::default(),
-        }, Command::none())
+        return (
+            Self {
+                simulation: Simulation::from_graph(graph, params),
+                update_step_counter: 0,
+                simulation_step_size: 0.055,
+                graph_state: GraphState::default(),
+            },
+            Command::none(),
+        );
     }
 
     fn title(&self) -> String {
@@ -646,23 +477,20 @@ impl Application for GraphApp {
             text: Color::from_rgba8(229, 233, 240, 1.0),
             primary: Color::from_rgba8(216, 222, 233, 0.3),
             success: Color::from_rgba8(136, 192, 208, 1.0),
-            danger: Color::from_rgba8(191, 97, 106, 1.0)
+            danger: Color::from_rgba8(191, 97, 106, 1.0),
         })
     }
 
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
-
-
         match message {
             // Event from Canvas
-            GMessage::GraphClick( node_index_option ) => { 
-
+            GMessage::GraphClick(node_index_option) => {
                 match node_index_option {
                     Some(node_index) => {
                         let node = &self.simulation.get_graph()[node_index];
                         self.graph_state.active_node = Some(node_index);
-                        println!("Clicked: {:?}", node);
-                    },
+                        println!("Clicked: {:?}", node.name);
+                    }
                     None => {
                         println!("Not clicked on a node")
                     }
@@ -670,7 +498,7 @@ impl Application for GraphApp {
 
                 // We are allowed to update the graph display again
                 self.update_step_counter = 0;
-            },
+            }
 
             // Timebased tick to update simulation
             // Don't update the simulation forever
@@ -680,7 +508,8 @@ impl Application for GraphApp {
                     self.simulation.update(self.simulation_step_size);
                     self.update_step_counter += 1;
                 }
-                self.graph_state.visualization_frac = (self.graph_state.visualization_frac + 1.0/120.0) % 1.0;
+                self.graph_state.visualization_frac =
+                    (self.graph_state.visualization_frac + 1.0 / 120.0) % 1.0;
             }
         }
 
@@ -688,42 +517,38 @@ impl Application for GraphApp {
     }
 
     fn view(&self) -> Element<Self::Message> {
-        // First Create a canvas, which has the same type as the application
-        // Then return a widget containing that application
-        // let canvas: Canvas<GMessage, Theme, &GraphApp> = iced::widget::canvas(self as &Self).width(Length::Fill).height(Length::Fill).into();
-        // return iced::widget::container(canvas).width(Length::Fill).height(Length::Fill).padding(0).into();
-
-        return Canvas::new(GraphDisplay::new(self.simulation.get_graph(), &self.graph_state)).width(Length::Fill).height(Length::Fill).into();
+        return Canvas::new(GraphDisplay::new(
+            self.simulation.get_graph(),
+            &self.graph_state,
+        ))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
     }
 
     // Continuously update the graph (15ms ~ 60fps)
     // Might not want to set a fixed time
     fn subscription(&self) -> Subscription<Self::Message> {
-        iced::time::every(std::time::Duration::from_millis(15)).map(|_| {
-            GMessage::GraphicsTick
-        })
+        iced::time::every(std::time::Duration::from_millis(15)).map(|_| GMessage::GraphicsTick)
     }
-
 }
 
-
 fn main() {
-
     // Read given arguments to find directory with nodes
     // Default to current directory
     let args: Vec<String> = env::args().collect();
 
     let notes_dir: PathBuf = match args.len() {
-        1 => { 
+        1 => {
             println!("Using default dir");
             PathBuf::from(".")
-        },
+        }
         2 => {
             let d = &args[1];
             println!("Using {}", d);
             PathBuf::from(d)
         }
-        _ => { 
+        _ => {
             println!("Invalid arguments");
             for a in &args {
                 print!(" {}", a);
@@ -732,12 +557,14 @@ fn main() {
         }
     };
 
+    let graph = graphreader::generate_graph(&notes_dir);
+
     // Start graphical interface
-    match GraphApp::run(Settings::with_flags(GraphAppFlags {notes_directory: notes_dir, ..Default::default()})) {
+    match GraphApp::run(Settings::with_flags(GraphAppFlags::from_graph(graph))) {
         Err(e) => {
             println!("{}", e);
-            return
-        },
+            return;
+        }
         Ok(_) => {
             return;
         }
