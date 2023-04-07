@@ -1,15 +1,14 @@
+use iced::mouse::ScrollDelta;
 use iced::widget::canvas::event;
 use iced::widget::canvas::{self, Cursor, Frame, Geometry, Stroke};
-use iced::{Color, Theme, Point, Rectangle};
-use iced::mouse::ScrollDelta;
+use iced::{Color, Point, Rectangle, Theme};
 
-use fdg_sim::ForceGraph;
-use fdg_sim::petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use fdg_sim::petgraph::graph::NodeIndex;
+use fdg_sim::petgraph::visit::{EdgeRef, IntoEdgeReferences};
+use fdg_sim::ForceGraph;
 
 use crate::icedgraph::messages::GMessage;
 use std::collections::HashMap;
-
 
 // Calculate the maximum and minimum coordinates for the graph nodes
 fn graph_bounds<T, U>(graph: &ForceGraph<T, U>) -> Rectangle {
@@ -103,7 +102,6 @@ pub struct GraphState {
     pub visualization_frac: f32,
 }
 
-
 impl Default for GraphState {
     fn default() -> Self {
         Self {
@@ -112,7 +110,6 @@ impl Default for GraphState {
         }
     }
 }
-
 
 // The Canvas
 pub struct GraphDisplay<'a, N, E> {

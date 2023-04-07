@@ -1,9 +1,9 @@
 mod graphreader;
 mod icedgraph;
 
-use std::env;
-use iced::Settings;
 use iced::Application;
+use iced::Settings;
+use std::env;
 use std::path::PathBuf;
 
 use icedgraph::graphapp::{GraphApp, GraphAppFlags};

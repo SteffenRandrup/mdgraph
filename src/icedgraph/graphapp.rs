@@ -1,15 +1,11 @@
-use iced::widget::Canvas;
 use iced::executor;
 use iced::theme::Palette;
+use iced::widget::Canvas;
 use iced::{Application, Command, Element, Subscription};
 use iced::{Color, Length, Theme};
 
+use fdg_sim::{self, force::handy, petgraph::Undirected};
 use fdg_sim::{ForceGraph, Simulation, SimulationParameters};
-use fdg_sim::{
-    self,
-    force::handy,
-    petgraph:: Undirected,
-};
 
 use crate::icedgraph::graphcanvas::{GraphDisplay, GraphState};
 use crate::icedgraph::messages::GMessage;
