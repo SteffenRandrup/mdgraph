@@ -9,6 +9,7 @@ use fdg_sim::ForceGraph;
 
 use crate::icedgraph::messages::GMessage;
 use std::collections::HashMap;
+use log;
 
 // Calculate the maximum and minimum coordinates for the graph nodes
 fn graph_bounds<T, U>(graph: &ForceGraph<T, U>) -> Rectangle {
@@ -172,6 +173,7 @@ impl<N, E> canvas::Program<GMessage> for GraphDisplay<'_, N, E> {
             canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
                 // Safe to unwrap, because we just clicked the canvas and therefore have focus
                 let cursor_position = canvas::Cursor::position(&cursor).unwrap();
+                log::info!("Got cursor position after click");
 
                 // Internally note that button is pressed and update position
                 state.left_button_pressed = true;

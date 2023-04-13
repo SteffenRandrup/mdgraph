@@ -13,6 +13,8 @@ use grep_searcher::sinks::UTF8;
 use grep_searcher::Searcher;
 use std::path::{Path, PathBuf};
 
+use log;
+
 pub fn get_files(notes_directory: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     // First check if the directory exists!
     if !notes_directory.exists() {
@@ -75,9 +77,18 @@ pub fn generate_graph(notes_directory: &PathBuf) -> ForceGraph<(), ()> {
     let mut graph: ForceGraph<(), ()> = ForceGraph::default();
 
     let notes_path = Path::new(notes_directory);
-    let files_vec = get_files(notes_path).unwrap();
+    let files_vec = match get_files(notes_path) {
+        Err(_) => {
+            log::info!("Empty graph");
+            return graph;
+        },
+        Ok(files) => {
+            files
+        }
+    };
 
     if files_vec.len() == 0 {
+        log::info!("Empty graph");
         // TODO is it better to return an empty graph
         // return Err(Box::from("Cannot build graph from empty list!"));
         return graph;

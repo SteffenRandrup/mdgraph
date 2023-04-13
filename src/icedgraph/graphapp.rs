@@ -1,4 +1,4 @@
-use iced::executor;
+use iced::{executor, subscription};
 use iced::theme::Palette;
 use iced::widget::Canvas;
 use iced::{Application, Command, Element, Subscription};
@@ -9,6 +9,18 @@ use fdg_sim::{ForceGraph, Simulation, SimulationParameters};
 
 use crate::icedgraph::graphcanvas::{GraphDisplay, GraphState};
 use crate::icedgraph::messages::GMessage;
+use crate::icedgraph::nvimplugin;
+
+// use nvim_rs::{
+//     compat::tokio::Compat, create::tokio as create, Handler, Neovim, rpc::IntoVal, 
+// };
+// use crate::icedgraph::nvimplugin::{self, nvimmanager};
+
+use log;
+
+// use super::nvimplugin::{NeovimHandler, nvimmanager};
+
+// use super::nvimplugin;
 
 pub struct GraphApp<N, E> {
     simulation: Simulation<N, E, Undirected>,
@@ -39,6 +51,8 @@ impl<N, E> Application for GraphApp<N, E> {
         let simforce = handy(200.0, 0.9, true, true);
         let params = SimulationParameters::new(200.0, fdg_sim::Dimensions::Two, simforce);
 
+        log::info!("Created Markdown Links Application");
+
         return (
             Self {
                 simulation: Simulation::from_graph(graph, params),
@@ -65,6 +79,7 @@ impl<N, E> Application for GraphApp<N, E> {
     }
 
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
+
         match message {
             // Event from Canvas
             GMessage::GraphClick(node_index_option) => {
@@ -72,10 +87,10 @@ impl<N, E> Application for GraphApp<N, E> {
                     Some(node_index) => {
                         let node = &self.simulation.get_graph()[node_index];
                         self.graph_state.active_node = Some(node_index);
-                        println!("Clicked: {:?}", node.name);
+                        log::info!("Clicked: {:?}", node.name);
                     }
                     None => {
-                        println!("Not clicked on a node")
+                        log::trace!("Not clicked on a node");
                     }
                 }
 
@@ -93,7 +108,7 @@ impl<N, E> Application for GraphApp<N, E> {
                 }
                 self.graph_state.visualization_frac =
                     (self.graph_state.visualization_frac + 1.0 / 120.0) % 1.0;
-            }
+            },
         }
 
         Command::none()
@@ -112,6 +127,12 @@ impl<N, E> Application for GraphApp<N, E> {
     // Continuously update the graph (15ms ~ 60fps)
     // Might not want to set a fixed time
     fn subscription(&self) -> Subscription<Self::Message> {
-        iced::time::every(std::time::Duration::from_millis(15)).map(|_| GMessage::GraphicsTick)
+        // iced::time::every(std::time::Duration::from_millis(15)).map(|_| GMessage::GraphicsTick)
+
+        // nvimmanager().map(|state| {
+        nvimplugin::connect().map(|state| {
+            GMessage::GraphicsTick
+        })
     }
 }
+
