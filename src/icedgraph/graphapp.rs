@@ -27,15 +27,17 @@ pub struct GraphApp<N, E> {
     update_step_counter: usize,
     simulation_step_size: f32,
     graph_state: GraphState,
+    use_nvim: bool,
 }
 
 pub struct GraphAppFlags<N, E> {
     graph: ForceGraph<N, E>,
+    use_nvim: bool,
 }
 
 impl<N, E> GraphAppFlags<N, E> {
     pub fn from_graph(graph: ForceGraph<N, E>) -> GraphAppFlags<N, E> {
-        return GraphAppFlags { graph };
+        return GraphAppFlags { graph, use_nvim: false };
     }
 }
 
@@ -59,6 +61,7 @@ impl<N, E> Application for GraphApp<N, E> {
                 update_step_counter: 0,
                 simulation_step_size: 0.055,
                 graph_state: GraphState::default(),
+                use_nvim: flags.use_nvim,
             },
             Command::none(),
         );
@@ -127,11 +130,15 @@ impl<N, E> Application for GraphApp<N, E> {
     // Continuously update the graph (15ms ~ 60fps)
     // Might not want to set a fixed time
     fn subscription(&self) -> Subscription<Self::Message> {
-        // iced::time::every(std::time::Duration::from_millis(15)).map(|_| GMessage::GraphicsTick)
 
-        nvimplugin::connect().map(|_| {
-            GMessage::GraphicsTick
-        })
+        if self.use_nvim {
+            nvimplugin::connect().map(|_| {
+                GMessage::GraphicsTick
+            })
+        } else {
+            iced::time::every(std::time::Duration::from_millis(15)).map(|_| GMessage::GraphicsTick)
+        }
+
     }
 }
 
