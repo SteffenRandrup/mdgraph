@@ -46,6 +46,7 @@ impl NvimEventHandler {
     fn new() -> NvimEventHandler {
         // TODO handle inability to get session
         let mut session = Session::new_parent().unwrap();
+        session.set_infinity_timeout();
         let mut nvim = Neovim::new(session);
         let channel = nvim.session.start_event_loop_channel();
         NvimEventHandler { nvim, channel}
@@ -82,10 +83,10 @@ pub fn connect() -> Subscription<Event> {
 
                         match output.send(Event::Connected(Connection(sender))).await {
                             Ok(_) => {
-                                log::trace!("Connected!")
+                                log::info!("Connected!")
                             },
                             Err(_e) => {
-                                log::trace!("In err branch")
+                                log::info!("In err branch")
                             }
                         };
 

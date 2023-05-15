@@ -129,8 +129,7 @@ impl<N, E> Application for GraphApp<N, E> {
     fn subscription(&self) -> Subscription<Self::Message> {
         // iced::time::every(std::time::Duration::from_millis(15)).map(|_| GMessage::GraphicsTick)
 
-        // nvimmanager().map(|state| {
-        nvimplugin::connect().map(|state| {
+        nvimplugin::connect().map(|_| {
             GMessage::GraphicsTick
         })
     }

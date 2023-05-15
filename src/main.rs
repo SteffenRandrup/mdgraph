@@ -18,7 +18,7 @@ use log4rs::config::{Appender, Config, Root};
 fn setup_logging() {
     let logfile = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{l} - {m}\n")))
-        .build("/home/steffen/nvim.log").unwrap();
+        .build("./nvim.log").unwrap();
 
     let config = Config::builder()
         .appender(Appender::builder().build("logfile", Box::new(logfile)))
